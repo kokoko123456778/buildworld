@@ -15,6 +15,7 @@
 #include <map>
 #include <algorithm>
 #include <initializer_list>
+#include <tuple>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -128,7 +129,7 @@ enum Block : u8 {
     B_GLASS, B_COAL_ORE, B_IRON_ORE, B_GOLD_ORE, B_DIAMOND_ORE, B_BEDROCK, B_WATER, B_LAVA, B_SNOW, B_SNOWGRASS,
     B_ICE, B_CACTUS, B_SANDSTONE, B_PINE_LOG, B_PINE_LEAVES, B_TALLGRASS, B_FLOWER_R, B_FLOWER_Y, B_SAPLING, B_TORCH,
     B_CRAFT, B_FURNACE, B_CHEST, B_DOOR, B_LADDER, B_BED, B_STONEBRICK, B_OBSIDIAN, B_IRON_BLOCK, B_GOLD_BLOCK,
-    B_DIAMOND_BLOCK, B_FURNACE_LIT,
+    B_DIAMOND_BLOCK, B_FURNACE_LIT, B_ANVIL,
     B_COUNT
 };
 
@@ -144,16 +145,21 @@ enum Tile {
     T_CRACK0 = 56, T_SUN = 61, T_MOON = 62, T_FLAME = 63,
     T_STICK = 64, T_COAL, T_IRON_INGOT, T_GOLD_INGOT, T_DIAMOND, T_APPLE, T_RAWMEAT, T_COOKED, T_BONE, T_BONEMEAL,
     T_ROTTEN, T_FLUFF, T_DOOR_ITEM, T_BED_ITEM,
-    T_HEART_F = 80, T_HEART_H, T_HEART_E, T_FOOD_F, T_FOOD_H, T_FOOD_E, T_BUBBLE, T_BOOK, T_WATER_FX, T_STRING, T_BOW, T_ARROW,
+    T_HEART_F = 80, T_HEART_H, T_HEART_E, T_FOOD_F, T_FOOD_H, T_FOOD_E, T_BUBBLE, T_BOOK, T_WATER_FX, T_STRING, T_BOW, T_ARROW, T_EBOOK, T_PBOOK, T_ANVIL_ITEM,
     T_TOOL0 = 96,                  // 96..115: материал*4 + вид
+    T_ARMOR0 = 116,                // 116..127: броня, материал*4 + часть
     T_TOPTUN_SIDE = 128, T_TOPTUN_FACE, T_TOPTUN_LEG, T_PUKH_BODY, T_PUKH_FACE, T_PUKH_LEG,
     T_GNIL_BODY, T_GNIL_FACE, T_GNIL_LEG, T_TEN_BODY, T_TEN_FACE, T_TEN_LEG, T_SKIN, T_SLEEVE, T_HORN,
     T_MUSHCAP, T_GNIL_TOP, T_TEN_SPIKE,
     T_ZOMB_FACE, T_ZOMB_SKIN, T_ZOMB_SHIRT, T_ZOMB_PANTS, T_SKEL_FACE, T_SKEL_BONE, T_SKEL_RIBS, T_SKEL_HOOD,
     T_SPID_FACE, T_SPID_BODY, T_SPID_ABDO, T_SPID_LEG, T_BOWWOOD,
+    T_YAK_BODY, T_YAK_TOP, T_YAK_FRINGE, T_YAK_FACE, T_YAK_HEADSIDE, T_YAK_MUZZLE, T_YAK_LEG, T_YAK_HORN, T_YAK_TAIL,
+    T_DUCK_SIDE, T_DUCK_TOP, T_DUCK_CHEST, T_DUCK_HEAD, T_DUCK_HEADSIDE, T_DUCK_NECK, T_DUCK_BILL, T_DUCK_FOOT, T_DUCK_TAIL,
+    T_ARMHUD_F, T_ARMHUD_H, T_ARMHUD_E, T_ANVIL_TOP, T_ANVIL_SIDE,
+    T_FISH0, T_FFRY0 = T_FISH0 + 4, T_FSKIN0 = T_FFRY0 + 4, T_FFIN0 = T_FSKIN0 + 4, T_FTAIL0 = T_FFIN0 + 4, T_ROD = T_FTAIL0 + 4, T_ROD_HAND, T_FEYE0,
 };
 
-enum Shape { SH_NONE = 0, SH_CUBE, SH_CROSS, SH_TORCH, SH_DOOR, SH_LADDER, SH_BED, SH_FLUID };
+enum Shape { SH_NONE = 0, SH_CUBE, SH_CROSS, SH_TORCH, SH_DOOR, SH_LADDER, SH_BED, SH_FLUID, SH_ANVIL };
 enum ToolKind { TK_PICK = 0, TK_AXE, TK_SHOVEL, TK_SWORD, TK_NONE = 255 };
 enum SoundMat { SM_STONE = 0, SM_GRASS, SM_SAND, SM_WOOD, SM_GLASS, SM_SNOW };
 
@@ -229,6 +235,7 @@ static void initBlocks() {
     defCube(B_IRON_BLOCK, "ЖЕЛЕЗНЫЙ БЛОК", T_IRON_BLOCK, 5.0f, TK_PICK, SM_STONE, true, 1);
     defCube(B_GOLD_BLOCK, "ЗОЛОТОЙ БЛОК", T_GOLD_BLOCK, 3.0f, TK_PICK, SM_STONE, true, 2);
     defCube(B_DIAMOND_BLOCK, "АЛМАЗНЫЙ БЛОК", T_DIAMOND_BLOCK, 5.0f, TK_PICK, SM_STONE, true, 2);
+    defBlock(B_ANVIL, "НАКОВАЛЬНЯ", T_ANVIL_SIDE, T_ANVIL_SIDE, T_ANVIL_TOP, T_ANVIL_SIDE, T_ANVIL_SIDE, T_ANVIL_SIDE, SH_ANVIL, false, true, 0, 5.0f, TK_PICK, 1, 0, SM_STONE, false, true);
 }
 
 // ---------------------------------------------------------------- предметы
@@ -236,7 +243,12 @@ enum Item : u16 {
     I_STICK = 64, I_COAL, I_IRON, I_GOLD, I_DIAMOND, I_APPLE, I_RAWMEAT, I_COOKED, I_BONE, I_BONEMEAL, I_ROTTEN, I_FLUFF,
     I_STRING, I_BOW, I_ARROW,
     I_TOOL0 = 80,   // 80..99: материал*4 + вид
-    I_END = 100
+    I_BOOK = 100, I_EBOOK,
+    I_ARMOR0 = 102, // 102..113: броня (железо, золото, алмаз) * 4 части
+    I_FISH0 = 114,  // 114..117: сырая рыба (окунь, карась, форель, щука)
+    I_FFRY0 = 118,  // 118..121: жареная рыба
+    I_ROD = 122,    // удочка
+    I_END = 123
 };
 enum Mat { MT_WOOD = 0, MT_STONE, MT_IRON, MT_GOLD, MT_DIAMOND };
 static const char* MAT_NAME_M[5] = {"ДЕРЕВЯННЫЙ", "КАМЕННЫЙ", "ЖЕЛЕЗНЫЙ", "ЗОЛОТОЙ", "АЛМАЗНЫЙ"};
@@ -251,7 +263,23 @@ static inline int toolMat(int id) { return (id - I_TOOL0) / 4; }
 static inline int toolKind(int id) { return (id - I_TOOL0) % 4; }
 static inline int toolId(int mat, int kind) { return I_TOOL0 + mat * 4 + kind; }
 static inline bool isBlockItem(int id) { return id > 0 && id < B_COUNT; }
+// броня: материал 0 — железо, 1 — золото, 2 — алмаз; часть 0 — шлем, 1 — нагрудник, 2 — поножи, 3 — ботинки
+static inline bool isArmor(int id) { return id >= I_ARMOR0 && id < I_ARMOR0 + 12; }
+static inline int armorMat(int id) { return (id - I_ARMOR0) / 4; }
+static inline int armorPiece(int id) { return (id - I_ARMOR0) % 4; }
+static inline int armorId(int mat, int piece) { return I_ARMOR0 + mat * 4 + piece; }
+static const int ARMOR_PTS[3][4] = {{2, 6, 5, 2}, {2, 5, 3, 1}, {3, 8, 6, 3}};
+static const int ARMOR_DUR[3][4] = {{165, 240, 225, 195}, {77, 112, 105, 91}, {363, 528, 495, 429}};
+static const char* ARMOR_PIECE[4] = {"ШЛЕМ", "НАГРУДНИК", "ПОНОЖИ", "БОТИНКИ"};
+static const char* ARMOR_MAT_M[3] = {"ЖЕЛЕЗНЫЙ", "ЗОЛОТОЙ", "АЛМАЗНЫЙ"};
+static const char* ARMOR_MAT_PL[3] = {"ЖЕЛЕЗНЫЕ", "ЗОЛОТЫЕ", "АЛМАЗНЫЕ"};
+static inline bool isFishRaw(int id) { return id >= I_FISH0 && id < I_FISH0 + 4; }
+static inline bool isFishFry(int id) { return id >= I_FFRY0 && id < I_FFRY0 + 4; }
+static const int ROD_DUR = 64;
+static inline int maxDur(int id) { if (id == I_ROD) return ROD_DUR; if (isTool(id)) return MAT_DUR[toolMat(id)]; if (isArmor(id)) return ARMOR_DUR[armorMat(id)][armorPiece(id)]; return 0; }
 
+static const char* FISH_NAME[4][2] = {{"СЫРОЙ ОКУНЬ", "ЖАРЕНЫЙ ОКУНЬ"}, {"СЫРОЙ КАРАСЬ", "ЖАРЕНЫЙ КАРАСЬ"}, {"СЫРАЯ ФОРЕЛЬ", "ЖАРЕНАЯ ФОРЕЛЬ"}, {"СЫРАЯ ЩУКА", "ЖАРЕНАЯ ЩУКА"}};
+static const char* FISH_SPECIES[4] = {"ОКУНЬ", "КАРАСЬ", "ФОРЕЛЬ", "ЩУКА"};
 static std::string itemName(int id) {
     if (isBlockItem(id)) return BD[id].name;
     if (isTool(id)) {
@@ -269,12 +297,17 @@ static std::string itemName(int id) {
         case I_RAWMEAT: return "СЫРОЕ МЯСО"; case I_COOKED: return "ЖАРЕНОЕ МЯСО"; case I_BONE: return "КОСТЬ";
         case I_BONEMEAL: return "КОСТНАЯ МУКА"; case I_ROTTEN: return "ГНИЛАЯ ПЛОТЬ"; case I_FLUFF: return "ПУХ";
         case I_STRING: return "НИТЬ"; case I_BOW: return "ЛУК"; case I_ARROW: return "СТРЕЛА";
+        case I_BOOK: return "КНИГА"; case I_EBOOK: return "ЗАЧАРОВАННАЯ КНИГА"; case I_ROD: return "УДОЧКА";
     }
+    if (isFishRaw(id)) return FISH_NAME[id - I_FISH0][0];
+    if (isFishFry(id)) return FISH_NAME[id - I_FFRY0][1];
+    if (isArmor(id)) { int m = armorMat(id), p = armorPiece(id); return std::string(p >= 2 ? ARMOR_MAT_PL[m] : ARMOR_MAT_M[m]) + " " + ARMOR_PIECE[p]; }
     return "?";
 }
 static int itemTile(int id) {
     if (id == B_DOOR) return T_DOOR_ITEM;
     if (id == B_BED) return T_BED_ITEM;
+    if (id == B_ANVIL) return T_ANVIL_ITEM;
     if (isBlockItem(id)) {
         const BlockDef& d = BD[id];
         if (d.shape == SH_CUBE || d.shape == SH_FLUID) return d.tex[4];
@@ -285,11 +318,20 @@ static int itemTile(int id) {
     if (id == I_STRING) return T_STRING;
     if (id == I_BOW) return T_BOW;
     if (id == I_ARROW) return T_ARROW;
+    if (id == I_BOOK) return T_PBOOK;
+    if (id == I_EBOOK) return T_EBOOK;
+    if (isArmor(id)) return T_ARMOR0 + (id - I_ARMOR0);
+    if (isFishRaw(id)) return T_FISH0 + (id - I_FISH0);
+    if (isFishFry(id)) return T_FFRY0 + (id - I_FFRY0);
+    if (id == I_ROD) return T_ROD;
     return T_WHITE;
 }
-static inline int maxStack(int id) { return (isTool(id) || id == I_BOW) ? 1 : 64; }
+static inline int maxStack(int id) { return (isTool(id) || id == I_BOW || isArmor(id) || id == I_EBOOK || id == I_ROD) ? 1 : 64; }
 static inline int foodValue(int id) {
     switch (id) { case I_APPLE: return 4; case I_RAWMEAT: return 3; case I_COOKED: return 8; case I_ROTTEN: return 2; }
+    static const int raw[4] = {2, 2, 2, 3}, fry[4] = {6, 5, 6, 8};
+    if (isFishRaw(id)) return raw[id - I_FISH0];
+    if (isFishFry(id)) return fry[id - I_FFRY0];
     return 0;
 }
 static inline bool itemIsCubeIcon(int id) {
@@ -299,11 +341,39 @@ static inline bool itemIsCubeIcon(int id) {
 }
 
 struct Stack {
-    u16 id = 0, cnt = 0, dmg = 0;
+    u16 id = 0, cnt = 0, dmg = 0, ench = 0;   // ench: по 3 бита на зачарование
     bool empty() const { return id == 0 || cnt == 0; }
-    void clear() { id = cnt = dmg = 0; }
+    void clear() { id = cnt = dmg = ench = 0; }
 };
-static inline Stack mkStack(int id, int cnt) { Stack s; s.id = (u16)id; s.cnt = (u16)cnt; s.dmg = 0; return s; }
+static inline Stack mkStack(int id, int cnt) { Stack s; s.id = (u16)id; s.cnt = (u16)cnt; s.dmg = 0; s.ench = 0; return s; }
+
+// ---------------------------------------------------------------- зачарования
+enum Ench { EN_EFF = 0, EN_DMG, EN_LUCK, EN_PROT, EN_COUNT };
+static const char* EN_NAME[EN_COUNT] = {"ЭФФЕКТИВНОСТЬ", "УРОН", "УДАЧА", "ЗАЩИТА"};
+static const int EN_MAX[EN_COUNT] = {5, 5, 4, 5};
+static const char* ROMAN[8] = {"", "I", "II", "III", "IV", "V", "VI", "VII"};
+static inline int enchLvl(const Stack& s, int e) { return (s.ench >> (e * 3)) & 7; }
+static inline void setEnch(Stack& s, int e, int l) { s.ench = (u16)((s.ench & ~(7u << (e * 3))) | ((u32)clampi(l, 0, 7) << (e * 3))); }
+// какое зачарование на что накладывается
+static bool enchFits(int id, int e) {
+    if (id == I_EBOOK) return true;
+    if (isTool(id)) {
+        int k = toolKind(id);
+        if (e == EN_EFF) return k != TK_SWORD;
+        if (e == EN_DMG) return k == TK_SWORD || k == TK_AXE;
+        if (e == EN_LUCK) return k != TK_SWORD;
+        return false;
+    }
+    if (isArmor(id)) return e == EN_PROT;
+    if (id == I_ROD) return e == EN_LUCK;   // удача на удочке — клюёт чаще, попадается крупная рыба
+    return false;
+}
+static std::string enchText(const Stack& s) {
+    std::string t;
+    for (int e = 0; e < EN_COUNT; e++) { int l = enchLvl(s, e); if (!l) continue; if (!t.empty()) t += ", "; t += std::string(EN_NAME[e]) + " " + ROMAN[l]; }
+    return t;
+}
+static std::string stackName(const Stack& s) { std::string n = itemName(s.id); if (s.ench) n += ": " + enchText(s); return n; }
 
 // ============================================================================
 //  ТЕКСТУРЫ: атлас 256x256 (16x16 тайлов по 16x16 пикселей), рисуется кодом
@@ -949,6 +1019,103 @@ static void genAtlas() {
     { TP t(T_SPID_LEG); TN n = makeNoise(209, {{2, 0.5f}, {1, 0.5f}}); fillNoise(t, spP, n, 0.6f);
       for (int y = 0; y < 16; y += 5) for (int x = 0; x < 16; x++) t.set(x, y, HEX(0x7a5c3a)); }
     { TP t(T_BOWWOOD); TN n = makeNoise(210, {{8, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x4f3420, 0x5e3f26, 0x6e4b2c, 0x7d5734}), n, 0.5f); }
+    // ---------- книги
+    auto bookIcon = [&](int tile, u32 cover, u32 coverD, u32 rune) {
+        TP t(tile); t.clear();
+        for (int y = 2; y < 14; y++) for (int x = 3; x < 13; x++) t.set(x, y, (x + y) % 7 == 0 ? HEX(coverD) : HEX(cover));
+        for (int y = 3; y < 13; y++) { t.set(12, y, HEX(0xf2ead6)); t.set(13, y + 1, HEX(0xd8ceb6)); }   // страницы
+        for (int x = 4; x < 13; x++) t.set(x, 13, HEX(0xe8dfc8));
+        for (int y = 2; y < 14; y++) { t.set(3, y, HEX(coverD)); t.set(4, y, HEX(coverD)); }             // корешок
+        t.rect(6, 4, 10, 4, HEX(rune)); t.rect(6, 6, 9, 6, HEX(rune)); t.rect(6, 10, 10, 10, HEX(rune));
+        t.set(8, 8, HEX(rune)); t.set(7, 8, HEX(rune)); t.set(9, 8, HEX(rune));
+    };
+    bookIcon(T_PBOOK, 0x8a5a2e, 0x5e3c1c, 0xc8a46a);
+    bookIcon(T_EBOOK, 0x5a2e9a, 0x3a1a6a, 0xf2c84a);
+    // ---------- броня: силуэты по маскам, свет сверху-слева
+    static const char* armMask[4][16] = {
+        {"................", "................", "................", "....########....", "...##########...", "..############..", "..############..", "..####....####..",
+         "..###......###..", "..###......###..", "..##........##..", "................", "................", "................", "................", "................"},
+        {"..#####..#####..", ".######..######.", ".##############.", ".##############.", ".##############.", "..############..", "...##########...", "...##########...",
+         "...##########...", "...##########...", "...##########...", "...##########...", "...##########...", "....########....", "................", "................"},
+        {"...##########...", "...##########...", "...##########...", "...####..####...", "...####..####...", "...###....###...", "...###....###...", "...###....###...",
+         "...###....###...", "...###....###...", "...###....###...", "...###....###...", "...###....###...", "................", "................", "................"},
+        {"................", "................", "................", "................", "................", "..###......###..", "..###......###..", "..###......###..",
+         "..###......###..", "..###......###..", "#####......#####", "#####......#####", "################", "................", "................", "................"},
+    };
+    const u32 armCol[3][4] = {{0x8a8c92, 0xb8bac0, 0xd6d8dc, 0xf2f3f5}, {0xa8780e, 0xd8a82a, 0xf2cc4a, 0xfff0a0}, {0x1e8c98, 0x38bcc6, 0x72dce2, 0xc8f8fa}};
+    for (int m = 0; m < 3; m++) for (int pc = 0; pc < 4; pc++) {
+        TP t(T_ARMOR0 + m * 4 + pc); t.clear();
+        auto in = [&](int x, int y) { return x >= 0 && y >= 0 && x < 16 && y < 16 && armMask[pc][y][x] == '#'; };
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            if (!in(x, y)) continue;
+            int lvl = 2;
+            if (!in(x - 1, y) || !in(x, y - 1)) lvl = 3;
+            if (!in(x + 1, y) || !in(x, y + 1)) lvl = 0;
+            else if (!in(x + 2, y) || !in(x, y + 2)) lvl = 1;
+            t.set(x, y, HEX(armCol[m][lvl]));
+        }
+        if (pc == 0) for (int x = 6; x < 10; x++) t.set(x, 4, HEX(armCol[m][3]));
+        if (pc == 1) for (int y = 3; y < 12; y++) t.set(8, y, HEX(armCol[m][1]));
+    }
+    // ---------- значок брони над сердцами (полный, половина, пустой)
+    static const char* armHud[7] = {"##...##", "#######", ".#####.", ".#####.", ".#####.", ".#####.", "..###.."};
+    for (int k = 0; k < 3; k++) { TP t(T_ARMHUD_F + k); t.clear();
+        for (int y = 0; y < 7; y++) for (int x = 0; x < 7; x++) if (armHud[y][x] == '#') {
+            bool full = (k == 0) || (k == 1 && x < 4);
+            u32 c = full ? ((x + y < 4) ? 0xf0f2f6 : 0xb8bcc4) : 0x3a3c44;
+            for (int sy = 0; sy < 2; sy++) for (int sx = 0; sx < 2; sx++) t.set(1 + x * 2 + sx, 1 + y * 2 + sy, HEX(c, full ? 255 : 200));
+        } }
+    // ---------- наковальня
+    { TP t(T_ANVIL_SIDE); TN n = makeNoise(220, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x2c2d32, 0x36373d, 0x404148, 0x4a4b52}), n, 0.6f); bevel(t, 0, 0, 15, 15, 16, 20); }
+    { TP t(T_ANVIL_TOP); TN n = makeNoise(221, {{8, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x3a3b42, 0x45464e, 0x50515a, 0x5c5d66}), n, 0.5f);
+      t.line(3, 4, 9, 6, HEX(0x6e7078)); t.line(6, 10, 12, 9, HEX(0x6e7078)); bevel(t, 0, 0, 15, 15, 22, 18); }
+    { TP t(T_ANVIL_ITEM); t.clear();
+      for (int y = 3; y <= 6; y++) for (int x = 1; x <= 14; x++) t.set(x, y, y == 3 ? HEX(0x6e7078) : HEX(0x45464e));
+      t.set(0, 4, HEX(0x45464e)); t.set(0, 5, HEX(0x45464e));
+      for (int y = 7; y <= 10; y++) for (int x = 5; x <= 10; x++) t.set(x, y, x == 5 ? HEX(0x55565e) : HEX(0x36373d));
+      for (int y = 11; y <= 13; y++) for (int x = 3; x <= 12; x++) t.set(x, y, y == 11 ? HEX(0x55565e) : HEX(0x2c2d32)); }
+    // ---------- ЯК: длинная бурая шерсть, светлая морда, изогнутые рога
+    const Pal yakP = mkPal({0x3a2414, 0x4a2e1a, 0x5b3920, 0x6b4527, 0x7c5230, 0x8d603a});
+    auto furStrands = [&](TP& t, u32 seed, float base) {   // вертикальные пряди
+        TN n = makeNoise(seed, {{4, 0.5f}, {2, 0.3f}, {1, 0.2f}});
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            float strand = ((hash32(seed + x * 13) % 100) / 100.f - 0.5f) * 0.35f;
+            float v = base + strand + (n.at(x, y) - 0.5f) * 0.4f + ((x + (int)(hash32(seed + x) % 3)) % 3 == 0 ? -0.15f : 0.f);
+            t.set(x, y, rampPick(yakP, clampf(v, 0, 0.999f), x, y, 0.4f));
+        }
+    };
+    { TP t(T_YAK_BODY); furStrands(t, 301, 0.55f); for (int x = 0; x < 16; x++) for (int y = 0; y < 3; y++) t.shade(x, y, 10); }
+    { TP t(T_YAK_TOP); TN n = makeNoise(302, {{4, 0.6f}, {2, 0.4f}}); fillNoise(t, yakP, n, 0.6f); for (int y = 0; y < 16; y += 3) for (int x = 0; x < 16; x++) if ((x + y) % 5 == 0) t.shade(x, y, -18); }
+    { TP t(T_YAK_FRINGE); t.clear(); furStrands(t, 303, 0.4f);   // свисающая бахрома с неровным краем
+      for (int x = 0; x < 16; x++) { int len = 10 + (int)(hash32(304 + x * 7) % 6); for (int y = len; y < 16; y++) t.set(x, y, 0); t.shade(x, len - 1, -20); } }
+    { TP t(T_YAK_FACE); furStrands(t, 305, 0.32f);
+      for (int x = 1; x < 15; x++) for (int y = 0; y < 4; y++) if ((hash32(306 + x * 5 + y) % 3) != 0) t.set(x, y, yakP[4 + (x & 1)]);   // чёлка
+      t.rect(2, 5, 4, 7, HEX(0x150d08)); t.rect(11, 5, 13, 7, HEX(0x150d08)); t.set(3, 5, HEX(0xe8dcc8)); t.set(12, 5, HEX(0xe8dcc8)); t.set(2, 7, HEX(0x3a2414)); t.set(13, 7, HEX(0x3a2414)); }
+    { TP t(T_YAK_HEADSIDE); furStrands(t, 307, 0.35f); t.rect(10, 5, 12, 7, HEX(0x150d08)); t.set(11, 5, HEX(0xe8dcc8)); }
+    { TP t(T_YAK_MUZZLE); TN n = makeNoise(308, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x8f7a68, 0x9d8876, 0xab9684, 0xb8a492}), n, 0.5f);
+      t.rect(3, 6, 5, 9, HEX(0x2a1c14)); t.rect(10, 6, 12, 9, HEX(0x2a1c14)); t.set(3, 6, HEX(0x4a382c)); t.set(10, 6, HEX(0x4a382c));
+      for (int x = 2; x < 14; x++) t.set(x, 13, HEX(0x6b5848)); bevel(t, 0, 0, 15, 15, 14, 18); }
+    { TP t(T_YAK_LEG); furStrands(t, 309, 0.45f); for (int y = 12; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, y == 12 ? HEX(0x2a2420) : HEX(0x1a1614)); for (int y = 13; y < 16; y++) t.set(7, y, HEX(0x0c0a08)); }
+    { TP t(T_YAK_HORN); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) { float k = (x + y) / 30.f; t.set(x, y, mixc(HEX(0xe9dfc6), HEX(0x6e5f4c), k)); }
+      for (int i = 2; i < 16; i += 4) for (int x = 0; x < 16; x++) t.shade(x, i, -14); }
+    { TP t(T_YAK_TAIL); t.clear(); for (int y = 0; y < 16; y++) for (int x = 5; x < 11; x++) if (y < 9 ? (x == 7 || x == 8) : true) t.set(x, y, yakP[1 + ((x + y) % 3)]); }
+    // ---------- УТКА-КРЯКВА: изумрудная голова, белый ошейник, рыжая грудка, серые бока, рыжие лапы
+    { TP t(T_DUCK_SIDE); TN n = makeNoise(311, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x9a9690, 0xa8a49e, 0xb6b2ac, 0xc4c0ba}), n, 0.5f);
+      for (int y = 2; y < 9; y++) for (int x = 3; x < 16; x++) t.set(x, y, ((x + y) & 3) == 0 ? HEX(0x5d5248) : HEX(0x6e6156));   // крыло
+      for (int x = 7; x < 14; x++) { t.set(x, 7, HEX(0x2e4fb0)); t.set(x, 8, HEX(0x3c66d6)); t.set(x, 6, HEX(0xf0f0f0)); }        // синее «зеркальце»
+      for (int x = 0; x < 16; x += 3) for (int y = 10; y < 16; y += 2) t.shade(x, y, -10); }
+    { TP t(T_DUCK_TOP); TN n = makeNoise(312, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x5d5248, 0x6e6156, 0x7f7264, 0x8f8272}), n, 0.5f);
+      for (int y = 0; y < 16; y++) { t.set(7, y, HEX(0x4e443b)); t.set(8, y, HEX(0x4e443b)); } }
+    { TP t(T_DUCK_CHEST); TN n = makeNoise(313, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x6b3a20, 0x7d4628, 0x8e5230, 0x9f5f38}), n, 0.5f); }
+    { TP t(T_DUCK_HEAD); TN n = makeNoise(314, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x0f3d26, 0x145233, 0x1a6a40, 0x22844f, 0x2e9e60}), n, 0.6f);
+      for (int x = 3; x < 13; x++) t.set(x, 2, HEX(0x3fb873)); }
+    { TP t(T_DUCK_HEADSIDE); t.copyFrom(T_DUCK_HEAD); t.rect(9, 5, 11, 7, HEX(0x0a0a0a)); t.set(10, 5, HEX(0xffffff)); t.rect(8, 8, 11, 8, HEX(0x0d2e1d)); }
+    { TP t(T_DUCK_NECK); t.copyFrom(T_DUCK_HEAD); for (int y = 11; y < 14; y++) for (int x = 0; x < 16; x++) t.set(x, y, y == 13 ? HEX(0xd8d8d0) : HEX(0xf6f6f0)); for (int y = 14; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, HEX(0x6b3a20)); }
+    { TP t(T_DUCK_BILL); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, mixc(HEX(0xf5d23a), HEX(0xc9a01c), y / 16.f));
+      t.rect(6, 1, 9, 3, HEX(0x2b2a20)); t.rect(3, 8, 4, 9, HEX(0x6a5a20)); t.rect(11, 8, 12, 9, HEX(0x6a5a20)); }
+    { TP t(T_DUCK_FOOT); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, (x % 5 == 2) ? HEX(0xd8701c) : HEX(0xf28a2a)); }
+    { TP t(T_DUCK_TAIL); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, y < 6 ? HEX(0x1a1a1a) : (y < 10 ? HEX(0xf0f0ec) : HEX(0x8a8680)));
+      t.rect(6, 0, 9, 3, HEX(0x0f3d26)); }
     // предметы: нить, лук, стрела
     { TP t(T_STRING); t.clear();   // катушка ниток
       t.rect(3, 2, 12, 3, HEX(0x8a6538)); t.rect(3, 2, 12, 2, HEX(0xb08a55)); t.rect(3, 12, 12, 13, HEX(0x8a6538)); t.rect(3, 13, 12, 13, HEX(0x5d4224));
@@ -967,6 +1134,1152 @@ static void genAtlas() {
       t.rect(1, 12, 2, 13, HEX(0xf6d2e0)); t.rect(2, 14, 3, 14, HEX(0xf6d2e0)); t.set(1, 14, HEX(0xe8b0c6)); t.set(3, 11, HEX(0xe8b0c6)); }
     { TP t(T_SKIN); t.fill(222, 170, 130, 6); }
     { TP t(T_SLEEVE); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) { int v = (int)(t.r.sf() * 8) + ((x + y) % 4 == 0 ? -8 : 0); t.set(x, y, RGBA(48 + v, 96 + v, 150 + v)); } }
+}
+
+// ============================================================================
+//  ДЕТАЛЬНЫЕ ТЕКСТУРЫ БЛОКОВ (до 128x128 на грань): цвет + карта высот → объёмное освещение
+// ============================================================================
+static int g_tileRes = 128;                 // пикселей на грань блока: 16, 32, 64 или 128
+static std::vector<u32> g_hdAtlas;          // атлас 16 x 16 тайлов по g_tileRes пикселей
+static int g_hdSize = 256;
+static std::vector<u32> g_hdAnim[3][16];    // кадры воды, «воды для шейдеров» и лавы
+
+struct C3 { float r, g, b; };
+static inline C3 c3(u32 h) { C3 c = {((h >> 16) & 255) / 255.f, ((h >> 8) & 255) / 255.f, (h & 255) / 255.f}; return c; }
+static inline C3 cmix(C3 a, C3 b, float t) { C3 c = {a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}; return c; }
+static inline C3 cmul(C3 a, float k) { C3 c = {a.r * k, a.g * k, a.b * k}; return c; }
+struct Ramp {
+    std::vector<C3> s;
+    Ramp(std::initializer_list<u32> l) { for (u32 h : l) s.push_back(c3(h)); }
+    C3 at(float t) const {
+        t = clampf(t, 0.f, 1.f) * (s.size() - 1);
+        int i = std::min((int)t, (int)s.size() - 2);
+        return cmix(s[i], s[i + 1], t - i);
+    }
+};
+// бесшовный шум: px, py — число ячеек на тайл по осям
+static inline float hv(int x, int y, u32 s) { return (hash32((u32)x * 0x9E3779B1u ^ hash32((u32)y * 0x85EBCA77u ^ s)) & 0xFFFFFF) / 16777215.f; }
+static float pn(float u, float v, int px, int py, u32 s) {
+    float x = u * px, y = v * py; int xi = ifloor(x), yi = ifloor(y);
+    float fx = x - xi, fy = y - yi; fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    int x0 = ((xi % px) + px) % px, x1 = (x0 + 1) % px, y0 = ((yi % py) + py) % py, y1 = (y0 + 1) % py;
+    return lerpf(lerpf(hv(x0, y0, s), hv(x1, y0, s), fx), lerpf(hv(x0, y1, s), hv(x1, y1, s), fx), fy);
+}
+static float fbm(float u, float v, int p, int oct, u32 s, float gain = 0.5f, int py = -1) {
+    if (py < 0) py = p;
+    float sum = 0, amp = 1, norm = 0;
+    for (int i = 0; i < oct; i++) { sum += pn(u, v, p, py, s + i * 977u) * amp; norm += amp; amp *= gain; p *= 2; py *= 2; }
+    return sum / norm;
+}
+static float ridged(float u, float v, int p, int oct, u32 s, int py = -1) {
+    if (py < 0) py = p;
+    float sum = 0, amp = 1, norm = 0;
+    for (int i = 0; i < oct; i++) { float n = 1.f - fabsf(pn(u, v, p, py, s + i * 613u) * 2.f - 1.f); sum += n * n * amp; norm += amp; amp *= 0.5f; p *= 2; py *= 2; }
+    return sum / norm;
+}
+struct VR { float f1, f2; int id; float dx, dy; };
+static VR vor(float u, float v, int g, u32 s, float jit = 0.9f, int gy = -1) {
+    if (gy < 0) gy = g;
+    float x = u * g, y = v * gy; int xi = ifloor(x), yi = ifloor(y);
+    VR r = {1e9f, 1e9f, 0, 0, 0};
+    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+        int cx = xi + dx, cy = yi + dy, wx = ((cx % g) + g) % g, wy = ((cy % gy) + gy) % gy;
+        float ox = cx + 0.5f + (hv(wx, wy, s) - 0.5f) * jit, oy = cy + 0.5f + (hv(wx, wy, s + 7) - 0.5f) * jit;
+        float d = sqrtf((x - ox) * (x - ox) + (y - oy) * (y - oy));
+        if (d < r.f1) { r.f2 = r.f1; r.f1 = d; r.id = wx + wy * g; r.dx = x - ox; r.dy = y - oy; } else if (d < r.f2) r.f2 = d;
+    }
+    return r;
+}
+static inline float cellRnd(int id, u32 s) { return (hash32((u32)id * 2654435761u ^ s) & 0xFFFF) / 65535.f; }
+
+// холст тайла: цвет, прозрачность, высота
+struct HDT {
+    int R; std::vector<float> d;   // r g b a h
+    std::vector<float> gDark, gDepth;   // маска канавок: затемнение применяется один раз, а не накапливается
+    explicit HDT(int r) : R(r), d((size_t)r * r * 5, 0.f) { for (size_t i = 0; i < (size_t)R * R; i++) d[i * 5 + 3] = 1.f; }
+    float* at(int x, int y) { x = ((x % R) + R) % R; y = ((y % R) + R) % R; return &d[((size_t)y * R + x) * 5]; }
+    template <class F> void each(F f) { for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) f(x, y, (x + 0.5f) / R, (y + 0.5f) / R, at(x, y)); }
+    static void put(float* p, C3 c, float h, float a = 1.f) { p[0] = c.r; p[1] = c.g; p[2] = c.b; p[3] = a; p[4] = h; }
+    void clearAlpha() { for (size_t i = 0; i < (size_t)R * R; i++) { d[i * 5 + 3] = 0; d[i * 5 + 4] = 0; } }
+    // круг с мягким краем (в пикселях), dome — выпуклая высота
+    void disc(float cx, float cy, float rad, C3 c, float h, float a = 1.f, bool dome = true, bool wrap = true) {
+        int x0 = ifloor(cx - rad - 1), x1 = ifloor(cx + rad + 1), y0 = ifloor(cy - rad - 1), y1 = ifloor(cy + rad + 1);
+        for (int y = y0; y <= y1; y++) for (int x = x0; x <= x1; x++) {
+            if (!wrap && (x < 0 || y < 0 || x >= R || y >= R)) continue;
+            float dd = sqrtf((x + 0.5f - cx) * (x + 0.5f - cx) + (y + 0.5f - cy) * (y + 0.5f - cy));
+            float k = clampf(rad + 0.5f - dd, 0.f, 1.f) * a;
+            if (k <= 0) continue;
+            float* p = at(x, y);
+            float hh = dome ? h * sqrtf(std::max(0.f, 1.f - (dd / rad) * (dd / rad))) : h;
+            if (p[3] < 0.01f) { p[0] = c.r; p[1] = c.g; p[2] = c.b; }
+            else { p[0] += (c.r - p[0]) * k; p[1] += (c.g - p[1]) * k; p[2] += (c.b - p[2]) * k; }
+            p[3] = std::max(p[3], k); p[4] = std::max(p[4], hh * k + p[4] * (1 - k));
+        }
+    }
+    void line(float x0, float y0, float x1, float y1, float w, C3 c, float h, float a = 1.f, bool wrap = true) {
+        float L = sqrtf((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)); int n = std::max(1, (int)(L * 2.f));
+        for (int i = 0; i <= n; i++) { float t = i / (float)n; disc(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, w * 0.5f, c, h, a, false, wrap); }
+    }
+    // «вырезать» канавку: темнит и опускает высоту (через маску — один раз на пиксель)
+    void groove(float x0, float y0, float x1, float y1, float w, float dark, float depth, bool wrap = true) {
+        if (gDark.empty()) { gDark.assign((size_t)R * R, 0.f); gDepth.assign((size_t)R * R, 0.f); }
+        float L = sqrtf((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)); int n = std::max(1, (int)(L * 2.f));
+        for (int i = 0; i <= n; i++) {
+            float t = i / (float)n, cx = x0 + (x1 - x0) * t, cy = y0 + (y1 - y0) * t;
+            for (int y = ifloor(cy - w); y <= ifloor(cy + w); y++) for (int x = ifloor(cx - w); x <= ifloor(cx + w); x++) {
+                if (!wrap && (x < 0 || y < 0 || x >= R || y >= R)) continue;
+                float dd = sqrtf((x + 0.5f - cx) * (x + 0.5f - cx) + (y + 0.5f - cy) * (y + 0.5f - cy));
+                float k = clampf(w * 0.5f + 0.5f - dd, 0.f, 1.f); if (k <= 0) continue;
+                int xx = ((x % R) + R) % R, yy = ((y % R) + R) % R; size_t i2 = (size_t)yy * R + xx;
+                gDark[i2] = std::max(gDark[i2], dark * k); gDepth[i2] = std::max(gDepth[i2], depth * k);
+            }
+        }
+    }
+    void flushGrooves() {
+        if (gDark.empty()) return;
+        for (size_t i = 0; i < (size_t)R * R; i++) { float* p = &d[i * 5]; float m = 1.f - gDark[i]; p[0] *= m; p[1] *= m; p[2] *= m; p[4] -= gDepth[i]; }
+        gDark.clear(); gDepth.clear();
+    }
+    // объём: нормаль из высоты, свет сверху-слева, затенение во впадинах
+    void light(float bump, float aoK, bool wrap = true, float hi = 1.f) {
+        flushGrooves();
+        std::vector<float> h(R * R), hb(R * R), tmp(R * R);
+        for (int i = 0; i < R * R; i++) h[i] = d[i * 5 + 4];
+        auto H = [&](const std::vector<float>& a, int x, int y) {
+            if (wrap) { x = ((x % R) + R) % R; y = ((y % R) + R) % R; } else { x = clampi(x, 0, R - 1); y = clampi(y, 0, R - 1); }
+            return a[y * R + x];
+        };
+        int rad = std::max(1, R / 20);
+        for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) { float s = 0; for (int k = -rad; k <= rad; k++) s += H(h, x + k, y); tmp[y * R + x] = s / (2 * rad + 1); }
+        for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) { float s = 0; for (int k = -rad; k <= rad; k++) s += H(tmp, x, y + k); hb[y * R + x] = s / (2 * rad + 1); }
+        const float L[3] = {-0.48f, -0.56f, 0.67f};
+        float sc = bump * R / 16.f;
+        for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) {
+            float* p = &d[((size_t)y * R + x) * 5];
+            if (p[3] < 0.01f) continue;
+            float gx = (H(h, x + 1, y) - H(h, x - 1, y)) * 0.5f * sc, gy = (H(h, x, y + 1) - H(h, x, y - 1)) * 0.5f * sc;
+            float nx = -gx, ny = -gy, nz = 1.f, nl = sqrtf(nx * nx + ny * ny + nz * nz);
+            float diff = (nx * L[0] + ny * L[1] + nz * L[2]) / nl;
+            float shade = clampf(0.25f + 0.75f * diff / L[2], 0.35f, 1.55f);
+            if (shade > 1.f) shade = 1.f + (shade - 1.f) * hi;
+            float cav = clampf((h[y * R + x] - hb[y * R + x]) * 4.f, -1.f, 0.4f);
+            shade *= 1.f + aoK * cav;
+            p[0] *= shade; p[1] *= shade; p[2] *= shade;
+        }
+    }
+    void write(int tile) {
+        flushGrooves();
+        int tx = (tile & 15) * R, ty = (tile >> 4) * R;
+        for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) {
+            float* p = &d[((size_t)y * R + x) * 5];
+            g_hdAtlas[(size_t)(ty + y) * g_hdSize + tx + x] = RGBA((int)(p[0] * 255.f + 0.5f), (int)(p[1] * 255.f + 0.5f), (int)(p[2] * 255.f + 0.5f), (int)(clampf(p[3], 0, 1) * 255.f + 0.5f));
+        }
+    }
+    void toVec(std::vector<u32>& v) {
+        v.resize((size_t)R * R);
+        for (int i = 0; i < R * R; i++) { float* p = &d[(size_t)i * 5]; v[i] = RGBA((int)(p[0] * 255.f), (int)(p[1] * 255.f), (int)(p[2] * 255.f), (int)(clampf(p[3], 0, 1) * 255.f)); }
+    }
+};
+
+// ---------------------------------------------------------------- материалы
+static void hdDirt(HDT& t, u32 s) {
+    Ramp rp({0x3f2a1c, 0x553823, 0x6a472d, 0x7d5636, 0x8f6640});
+    t.each([&](int, int, float u, float v, float* p) {
+        float n = fbm(u, v, 4, 5, s), m = fbm(u, v, 16, 3, s + 9);
+        HDT::put(p, rp.at(n * 0.8f + m * 0.35f - 0.1f), n * 0.5f + m * 0.3f);
+    });
+    Rng r(s); int R = t.R; float k = R / 16.f;
+    for (int i = 0; i < 26; i++) {   // камешки
+        float cx = r.f() * R, cy = r.f() * R, rad = k * (0.35f + r.f() * 0.6f);
+        C3 c = cmix(c3(0x8a7e70), c3(0x5d4a3a), r.f());
+        t.disc(cx, cy, rad, c, 1.2f);
+    }
+    for (int i = 0; i < 3; i++) {    // редкие тонкие корешки
+        float x = r.f() * R, y = r.f() * R, a = r.f() * 6.28f;
+        for (int j = 0; j < 4; j++) { float nx = x + cosf(a) * k * 1.f, ny = y + sinf(a) * k * 1.f; t.line(x, y, nx, ny, k * 0.18f, c3(0x7d5c3c), 0.7f, 0.8f); x = nx; y = ny; a += r.sf() * 0.8f; }
+    }
+}
+static void hdGrassTop(HDT& t, u32 s) {
+    Ramp rp({0x2c5a1c, 0x3b7326, 0x4a8a30, 0x5aa13a, 0x6fb84a, 0x86cc5c});
+    t.each([&](int, int, float u, float v, float* p) { float n = fbm(u, v, 4, 4, s); HDT::put(p, rp.at(n * 0.7f), n * 0.3f); });
+    Rng r(s + 1); int R = t.R; float k = R / 16.f;
+    int blades = R * R / 7;
+    for (int i = 0; i < blades; i++) {
+        float x = r.f() * R, y = r.f() * R, a = r.f() * 6.28f, len = k * (0.6f + r.f() * 1.1f);
+        float tone = clampf(fbm(x / R, y / R, 4, 3, s) * 0.8f + r.sf() * 0.25f + 0.1f, 0, 1);
+        C3 c = rp.at(tone);
+        t.line(x, y, x + cosf(a) * len, y + sinf(a) * len, k * 0.32f, c, 0.6f + r.f() * 0.6f);
+        t.disc(x + cosf(a) * len, y + sinf(a) * len, k * 0.18f, cmul(c, 1.18f), 1.f, 1.f, false);
+    }
+    for (int i = 0; i < 4; i++) { float x = r.f() * R, y = r.f() * R; t.disc(x, y, k * 0.3f, c3(0xe8d860), 1.2f); }   // крохотные цветочки
+}
+static void hdOverhang(HDT& t, const Ramp& rp, u32 s, float minD, float maxD, C3 edge, bool blades) {
+    int R = t.R; float k = R / 16.f;
+    std::vector<float> depth(R);
+    for (int x = 0; x < R; x++) {
+        float u = (x + 0.5f) / R;
+        float dd = minD + (maxD - minD) * fbm(u, 0.3f, 4, 3, s);
+        float drip = pn(u, 0.7f, 12, 1, s + 3); if (drip > 0.72f) dd += (drip - 0.72f) * 0.9f;
+        depth[x] = dd * R;
+    }
+    for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) {
+        float* p = t.at(x, y); float D = depth[x];
+        if (y < D) {
+            float u = (x + 0.5f) / R, v = (y + 0.5f) / R;
+            float n = fbm(u, v, 8, 3, s + 5);
+            float vert = blades ? pn(u, v, R / 2, 2, s + 8) : 0.5f;
+            HDT::put(p, rp.at(0.85f - y / D * 0.45f + (n - 0.5f) * 0.4f + (vert - 0.5f) * 0.25f), 0.9f + vert * 0.3f);
+        } else if (y < D + k * 0.6f) { p[0] *= 0.55f; p[1] *= 0.55f; p[2] *= 0.55f; p[4] -= 0.4f; }   // тень под кромкой
+    }
+    (void)edge;
+}
+static void hdStone(HDT& t, u32 s, float tint = 0) {
+    Ramp rp({0x55575c, 0x65676c, 0x76787d, 0x87898e, 0x989a9f, 0xa9abaf});
+    t.each([&](int, int, float u, float v, float* p) {
+        float n = fbm(u, v, 3, 6, s), rd = ridged(u, v, 4, 4, s + 2), sp = pn(u, v, 64, 64, s + 4);
+        C3 c = rp.at(n * 0.85f + rd * 0.25f - 0.05f);
+        if (sp > 0.93f) c = cmul(c, 1.15f); if (sp < 0.05f) c = cmul(c, 0.8f);
+        c.r += tint * 0.03f; c.b -= tint * 0.02f;
+        HDT::put(p, c, n * 0.7f + rd * 0.6f);
+    });
+    Rng r(s + 1); int R = t.R; float k = R / 16.f;
+    // без трещин: на больших стенах любой повторяющийся рисунок бросается в глаза
+    (void)r; (void)k; (void)R;
+}
+// камни по Вороному: выпуклые, со швами раствора
+static void hdStones(HDT& t, u32 s, int grid, const Ramp& rp, C3 mortar, float mortarW, float jit, const Ramp* alt = nullptr, float bulge = 1.f) {
+    t.each([&](int, int, float u, float v, float* p) {
+        VR c = vor(u, v, grid, s, jit);
+        float edge = c.f2 - c.f1;
+        float n = fbm(u, v, 8, 4, s + 3);
+        if (edge < mortarW) { HDT::put(p, cmix(mortar, cmul(mortar, 0.7f), n), -0.2f + n * 0.2f); return; }
+        float cr = cellRnd(c.id, s);
+        const Ramp& rr = (alt && cr > 0.68f) ? *alt : rp;
+        float dome = sqrtf(clampf((edge - mortarW) * 3.2f, 0, 1));
+        C3 col = rr.at(cr * 0.7f + n * 0.4f - 0.05f);
+        HDT::put(p, col, dome * bulge + n * 0.35f);
+    });
+}
+static void hdBark(HDT& t, u32 s, const Ramp& rp) {
+    t.each([&](int, int, float u, float v, float* p) {
+        float fis = ridged(u + fbm(u, v, 2, 2, s + 9) * 0.15f, v, 6, 3, s, 1);   // вертикальные борозды
+        float n = fbm(u, v, 8, 4, s + 5, 0.5f, 3);
+        float plate = 1.f - fis;
+        HDT::put(p, rp.at(plate * 0.75f + n * 0.35f - 0.1f), plate * 1.2f + n * 0.3f);
+    });
+}
+static void hdLogTop(HDT& t, u32 s, const Ramp& wood, const Ramp& bark) {
+    int R = t.R;
+    t.each([&](int x, int y, float u, float v, float* p) {
+        float dx = u - 0.5f, dy = v - 0.5f;
+        float sq = std::max(fabsf(dx), fabsf(dy)), eu = sqrtf(dx * dx + dy * dy), rr = sq * 0.6f + eu * 0.4f;
+        float wob = (fbm(u, v, 4, 3, s) - 0.5f) * 0.03f;
+        if (sq > 0.44f + wob) { float n = fbm(u, v, 12, 3, s + 1); HDT::put(p, bark.at(n * 0.9f), 0.6f + n * 0.5f); return; }
+        float ring = 0.5f + 0.5f * sinf((rr + wob) * 70.f);
+        float n = fbm(u, v, 16, 3, s + 2);
+        C3 c = wood.at(0.25f + ring * 0.55f + (n - 0.5f) * 0.3f - rr * 0.4f);
+        if (rr < 0.025f) c = cmul(c, 0.7f);
+        HDT::put(p, c, ring * 0.25f + n * 0.15f);
+        (void)x; (void)y;
+    });
+    Rng r(s); float k = R / 16.f;
+    for (int i = 0; i < 3; i++) {   // радиальные трещины
+        float a = r.f() * 6.28f, r0 = 0.08f + r.f() * 0.1f, r1 = r0 + 0.12f + r.f() * 0.15f;
+        t.groove(R * (0.5f + cosf(a) * r0), R * (0.5f + sinf(a) * r0), R * (0.5f + cosf(a) * r1), R * (0.5f + sinf(a) * r1), k * 0.22f, 0.3f, 0.4f, false);
+    }
+}
+static void hdPlanks(HDT& t, u32 s, const Ramp& rp, C3 seam) {
+    int R = t.R; float k = R / 16.f;
+    const float joint[4] = {0.69f, 0.19f, 0.88f, 0.44f};
+    t.each([&](int x, int y, float u, float v, float* p) {
+        int b = std::min(3, (int)(v * 4)); float bv = v * 4 - b;
+        float tone = 0.3f + cellRnd(b, s) * 0.35f;
+        float grain = fbm(u * 1.f + b * 0.37f, v, 2, 4, s + b * 31, 0.55f, 24);
+        float fine = pn(u, v, 6, 96, s + 7);
+        float knot = 0;
+        { float kx = cellRnd(b, s + 11), ky = 0.5f; float dx = (u - kx) * 4.f, dy = (bv - ky); float dd = sqrtf(dx * dx + dy * dy * 1.6f);
+          if (cellRnd(b, s + 13) > 0.55f && dd < 0.35f) knot = 1.f - dd / 0.35f; }
+        float g2 = sinf((grain * 9.f + knot * 6.f) * 3.1416f) * 0.5f + 0.5f;
+        C3 c = rp.at(tone + (g2 - 0.5f) * 0.28f + (fine - 0.5f) * 0.12f - knot * 0.4f);
+        float h = 0.6f + g2 * 0.15f;
+        float edge = std::min(bv, 1.f - bv) * 4.f;
+        h -= (1.f - clampf(edge * 2.5f, 0, 1)) * 0.5f;
+        bool gap = bv > 1.f - 0.07f;
+        float jd = fabsf(u - joint[b]);
+        if (jd < 0.012f) gap = true;
+        if (gap) { HDT::put(p, seam, -0.4f); return; }
+        if (jd < 0.03f) h -= (0.03f - jd) * 12.f;
+        HDT::put(p, c, h);
+        (void)x; (void)y;
+    });
+    for (int b = 0; b < 4; b++) {   // гвоздики у стыков
+        float jx = joint[b] * R, cy = (b + 0.45f) * R / 4;
+        t.disc(jx - k * 0.9f, cy, k * 0.32f, c3(0x5a5650), 1.2f); t.disc(jx + k * 0.9f, cy, k * 0.32f, c3(0x5a5650), 1.2f);
+    }
+}
+static void hdLeaves(HDT& t, u32 s, std::initializer_list<u32> cols, bool needles) {
+    t.clearAlpha();
+    Ramp rp(cols);
+    Rng r(s); int R = t.R; float k = R / 16.f;
+    if (!needles) {
+        int n = R * R / 26;
+        for (int i = 0; i < n; i++) {
+            float cx = r.f() * R, cy = r.f() * R, a = r.f() * 6.28f, len = k * (1.1f + r.f() * 0.9f), wd = len * 0.45f;
+            float tone = clampf(0.15f + r.f() * 0.75f + (fbm(cx / R, cy / R, 4, 2, s) - 0.5f) * 0.5f, 0, 1);
+            C3 c = rp.at(tone);
+            float ca = cosf(a), sa = sinf(a);
+            float layer = r.f();
+            for (int y = ifloor(-len - 1); y <= (int)(len + 1); y++) for (int x = ifloor(-len - 1); x <= (int)(len + 1); x++) {
+                float lx = x * ca + y * sa, ly = -x * sa + y * ca;
+                float e = (lx / len) * (lx / len) + (ly / wd) * (ly / wd);
+                if (e > 1.f) continue;
+                float* p = t.at(ifloor(cx) + x, ifloor(cy) + y);
+                float h = layer + sqrtf(1.f - e) * 0.6f;
+                if (p[3] > 0.5f && p[4] > h) continue;
+                C3 cc = c;
+                if (fabsf(ly) < k * 0.12f && lx > -len * 0.8f) cc = cmul(c, 1.25f);     // жилка
+                cc = cmul(cc, 0.82f + 0.3f * (ly / wd * 0.5f + 0.5f));
+                HDT::put(p, cc, h, 1.f);
+            }
+        }
+    } else {
+        int n = R * R / 9;
+        for (int i = 0; i < n; i++) {
+            float cx = r.f() * R, cy = r.f() * R, a = 1.1f + r.sf() * 0.6f + (r.range(2) ? 3.14f : 0.f), len = k * (0.8f + r.f() * 0.7f);
+            C3 c = rp.at(r.f());
+            t.line(cx, cy, cx + cosf(a) * len, cy + sinf(a) * len, k * 0.28f, c, 0.4f + r.f() * 0.8f);
+        }
+    }
+    // просветы
+    t.each([&](int, int, float u, float v, float* p) { if (fbm(u, v, 6, 3, s + 77) < (needles ? 0.3f : 0.27f)) p[3] = 0; });
+}
+static void hdOre(HDT& t, u32 s, C3 dark, C3 mid, C3 light, C3 glint, int clusters, float size, bool crystal) {
+    hdStone(t, s);
+    Rng r(s * 3 + 1); int R = t.R; float k = R / 16.f;
+    // центры скоплений разносятся по всей грани: каждое — не ближе minD к остальным (с учётом бесшовности)
+    std::vector<std::pair<float, float>> ctr;
+    const float minD = 0.62f / sqrtf((float)clusters);
+    for (int tries = 0; tries < 4000 && (int)ctr.size() < clusters; tries++) {
+        float u = r.f(), v = r.f(); bool ok = true;
+        for (auto& c : ctr) {
+            float du = fabsf(u - c.first), dv = fabsf(v - c.second); du = std::min(du, 1.f - du); dv = std::min(dv, 1.f - dv);
+            if (du * du + dv * dv < minD * minD) { ok = false; break; }
+        }
+        if (ok) ctr.push_back(std::make_pair(u, v));
+    }
+    std::vector<std::tuple<float, float, float>> pcs;   // куски: x, y, радиус
+    for (auto& c : ctr) {
+        int pieces = 2 + r.range(3);
+        for (int j = 0; j < pieces; j++) {
+            float a = r.f() * 6.2831853f, dd = (j == 0 ? 0.f : (1.2f + r.f() * 1.3f)) * k;
+            pcs.push_back(std::make_tuple(c.first * R + cosf(a) * dd, c.second * R + sinf(a) * dd, k * size * (0.6f + r.f() * 0.6f)));
+        }
+    }
+    for (int i = 0; i < clusters + 2; i++) pcs.push_back(std::make_tuple(r.f() * R, r.f() * R, k * size * (0.35f + r.f() * 0.25f)));   // одиночные крупинки
+    for (auto& pc : pcs) {
+        {
+            float px = std::get<0>(pc), py = std::get<1>(pc), rad = std::get<2>(pc);
+            int sides = crystal ? 5 + r.range(3) : 9;
+            float rot = r.f() * 6.28f;
+            for (int y = ifloor(py - rad - 2); y <= (int)(py + rad + 2); y++) for (int x = ifloor(px - rad - 2); x <= (int)(px + rad + 2); x++) {
+                float dx = x + 0.5f - px, dy = y + 0.5f - py, a = atan2f(dy, dx) - rot, dd = sqrtf(dx * dx + dy * dy);
+                float seg = 6.2831853f / sides, ang = fmodf(a + 62.8318f, seg) - seg / 2;
+                float lim = rad * cosf(seg / 2) / cosf(ang) * (crystal ? 1.f : (0.85f + 0.15f * sinf(a * 3.f + rot)));
+                float* p = t.at(x, y);
+                if (dd > lim + k * 0.4f) continue;
+                if (dd > lim) { p[0] *= 0.6f; p[1] *= 0.6f; p[2] *= 0.6f; p[4] -= 0.2f; continue; }   // тень вокруг
+                int facet = (int)((a + 62.8318f) / seg) % sides;
+                float fl = crystal ? (0.55f + 0.45f * cosf(facet * seg + rot - 2.3f)) : (1.f - dd / lim * 0.6f);
+                C3 col = fl > 0.75f ? cmix(mid, light, (fl - 0.75f) * 4.f) : cmix(dark, mid, fl / 0.75f);
+                HDT::put(p, col, 1.5f + (1.f - dd / lim) * (crystal ? 0.6f : 1.f));
+            }
+            t.disc(px - rad * 0.3f, py - rad * 0.35f, k * 0.18f, glint, 2.2f, 0.7f, false);
+        }
+    }
+}
+static void hdBrick(HDT& t, u32 s, int rows, int cols, const Ramp& rp, C3 mortar, float mw, float chamfer) {
+    t.each([&](int, int, float u, float v, float* p) {
+        int row = std::min(rows - 1, (int)(v * rows)); float rv = v * rows - row;
+        float off = (row % 2) * 0.5f / cols;
+        float cu = u + off; cu -= floorf(cu);
+        int col = (int)(cu * cols); float ru = cu * cols - col;
+        float ex = std::min(ru, 1.f - ru) / cols, ey = std::min(rv, 1.f - rv) / rows, e = std::min(ex, ey);
+        float n = fbm(u, v, 8, 4, s);
+        if (e < mw) { HDT::put(p, cmix(mortar, cmul(mortar, 0.8f), n), -0.3f); return; }
+        float cr = cellRnd(row * 31 + col, s);
+        float bev = clampf((e - mw) / chamfer, 0, 1);
+        HDT::put(p, rp.at(cr * 0.5f + n * 0.5f), sqrtf(bev) * 1.f + n * 0.25f);
+    });
+}
+static void hdMetal(HDT& t, u32 s, const Ramp& rp, int kind) {
+    int R = t.R; float k = R / 16.f;
+    t.each([&](int, int, float u, float v, float* p) {
+        float br = pn(u, v, 4, 128, s), sh = 0.5f + 0.35f * sinf((u + v) * 3.f);
+        float e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+        float panel = clampf(e * 14.f, 0, 1);
+        float inner = fabsf(e - 0.14f) < 0.012f ? 1.f : 0.f;
+        HDT::put(p, rp.at(sh * 0.7f + br * 0.25f + 0.05f - inner * 0.3f), panel * 0.8f - inner * 0.5f + br * 0.05f);
+    });
+    const float rv[4][2] = {{0.08f, 0.08f}, {0.92f, 0.08f}, {0.08f, 0.92f}, {0.92f, 0.92f}};
+    for (auto& q : rv) t.disc(q[0] * R, q[1] * R, k * 0.5f, rp.at(0.85f), 1.6f, 1.f, true, false);
+    if (kind == 2) {   // алмазный: огранка в центре
+        t.each([&](int x, int y, float u, float v, float* p) {
+            float dx = u - 0.5f, dy = v - 0.5f, md = fabsf(dx) + fabsf(dy);
+            if (md < 0.3f) { int f = (dx > 0) + 2 * (dy > 0); float fl = 0.6f + 0.15f * f + (md < 0.12f ? 0.25f : 0); HDT::put(p, rp.at(fl), 1.4f - md * 2.f); }
+            (void)x; (void)y;
+        });
+    } else if (kind == 1) {   // золотой: выпуклый ромб
+        t.each([&](int, int, float u, float v, float* p) { float md = fabsf(u - 0.5f) + fabsf(v - 0.5f); if (md < 0.28f) { p[4] = 0.8f + (0.28f - md) * 3.f; } });
+    }
+}
+static void hdWool(HDT& t, u32 s, C3 base, C3 dark) {
+    t.each([&](int x, int y, float u, float v, float* p) {
+        float weave = ((x / std::max(1, t.R / 32) + y / std::max(1, t.R / 32)) & 1) ? 0.08f : -0.08f;
+        float n = fbm(u, v, 8, 4, s);
+        HDT::put(p, cmix(dark, base, 0.7f + n * 0.3f + weave), 0.5f + weave * 2.f + n * 0.3f);
+    });
+}
+
+// ---------------------------------------------------------------- все блоки
+static void genHDBlocks() {
+    const int R = g_tileRes; const float k = R / 16.f;
+    auto mk = [&]() { return HDT(R); };
+    // земля и трава
+    { HDT t = mk(); hdDirt(t, 11); t.light(0.06f, 0.5f); t.write(T_DIRT); }
+    Ramp grassR({0x2c5a1c, 0x3b7326, 0x4a8a30, 0x5aa13a, 0x6fb84a, 0x86cc5c});
+    { HDT t = mk(); hdGrassTop(t, 12); t.light(0.05f, 0.45f); t.write(T_GRASS_TOP); }
+    { HDT t = mk(); hdDirt(t, 11); hdOverhang(t, grassR, 13, 0.16f, 0.27f, c3(0x2f5f21), true); t.light(0.06f, 0.5f); t.write(T_GRASS_SIDE); }
+    // камни
+    { HDT t = mk(); hdStone(t, 14); t.light(0.05f, 0.5f); t.write(T_STONE); }
+    { HDT t = mk(); Ramp rp({0x55575c, 0x67696e, 0x7a7c81, 0x8c8e93, 0x9fa1a5}); hdStones(t, 15, 3, rp, c3(0x3e3f44), 0.035f, 0.85f); t.light(0.09f, 0.6f); t.write(T_COBBLE); }
+    { HDT t = mk(); Ramp rp({0x5d5853, 0x6e6862, 0x7f7871, 0x908880, 0xa09890}); Ramp alt({0x6a5444, 0x7e6654, 0x927866, 0xa68a78});
+      hdStones(t, 17, 6, rp, c3(0x3e3a36), 0.08f, 1.f, &alt, 0.9f); t.light(0.1f, 0.6f); t.write(T_GRAVEL); }
+    { HDT t = mk(); Ramp rp({0x0e0e10, 0x1f1f23, 0x333338, 0x48484f, 0x606068}); hdStones(t, 25, 4, rp, c3(0x09090a), 0.04f, 1.f);
+      t.each([&](int, int, float u, float v, float* p) { float n = ridged(u, v, 6, 3, 26); p[4] += n * 0.6f; }); t.light(0.1f, 0.7f); t.write(T_BEDROCK); }
+    // песок и песчаник
+    Ramp sandR({0xc4ab72, 0xd2ba82, 0xdec892, 0xe8d4a2, 0xf1e0b4});
+    { HDT t = mk(); t.each([&](int x, int y, float u, float v, float* p) {
+          float rip = sinf((u * 0.35f + v + fbm(u, v, 4, 2, 16) * 0.12f) * 6.2831853f * 5.f) * 0.5f + 0.5f;
+          float g = hv(x, y, 77) - 0.5f, n = fbm(u, v, 6, 3, 18);
+          C3 c = sandR.at(0.25f + n * 0.5f + rip * 0.15f + g * 0.25f);
+          if (hv(x, y, 79) > 0.985f) c = cmul(c, 0.72f);
+          if (hv(x, y, 81) > 0.993f) c = c3(0xf8f2e6);
+          HDT::put(p, c, rip * 0.4f + g * 0.25f); });
+      t.light(0.04f, 0.3f); t.write(T_SAND); }
+    Ramp sstR({0xb9a065, 0xc8ae73, 0xd5bc82, 0xe0c890, 0xe9d49f});
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          float layer = v + (fbm(u, v, 3, 2, 31) - 0.5f) * 0.05f;
+          float band = sinf(layer * 6.2831853f * 4.f) * 0.5f + 0.5f, n = fbm(u, v, 8, 4, 32);
+          float h = band * 0.3f + n * 0.4f;
+          C3 c = sstR.at(0.25f + band * 0.35f + (n - 0.5f) * 0.4f);
+          if (v < 0.17f) { c = sstR.at(0.75f + n * 0.25f); h = 0.8f + n * 0.2f; }
+          else if (v < 0.2f || fabsf(v - 0.78f) < 0.025f) { c = cmul(c, 0.72f); h = -0.2f; }
+          if (fbm(u, v, 16, 2, 33) < 0.18f) { c = cmul(c, 0.85f); h -= 0.3f; }   // выветренные ямки
+          HDT::put(p, c, h); });
+      t.light(0.06f, 0.5f); t.write(T_SANDSTONE); }
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          float n = fbm(u, v, 6, 4, 34), e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+          HDT::put(p, sstR.at(0.45f + n * 0.4f), clampf(e * 12.f, 0, 1) * 0.6f + n * 0.25f); });
+      t.light(0.06f, 0.4f, false); t.write(T_SANDSTONE_TOP); }
+    // дерево
+    Ramp barkR({0x2a1b10, 0x3e2918, 0x523621, 0x66442a, 0x7a5434});
+    Ramp woodR({0x8c6a3f, 0x9e7a4a, 0xb08a55, 0xc29b62, 0xd1aa70});
+    Ramp pbarkR({0x1e130b, 0x2e1d11, 0x3e2818, 0x4e331f, 0x5e3e27});
+    Ramp pwoodR({0x7a5530, 0x8a6238, 0x9c7443, 0xae844f, 0xbe925a});
+    { HDT t = mk(); hdBark(t, 18, barkR); t.light(0.08f, 0.6f); t.write(T_LOG); }
+    { HDT t = mk(); hdLogTop(t, 19, woodR, barkR); t.light(0.05f, 0.4f, false); t.write(T_LOG_TOP); }
+    { HDT t = mk(); hdBark(t, 33, pbarkR); t.light(0.09f, 0.6f); t.write(T_PINE_LOG); }
+    { HDT t = mk(); hdLogTop(t, 35, pwoodR, pbarkR); t.light(0.05f, 0.4f, false); t.write(T_PINE_TOP); }
+    Ramp plankR({0x7d5a32, 0x906a3c, 0xa47b47, 0xb68b53, 0xc79b60});
+    { HDT t = mk(); hdPlanks(t, 20, plankR, c3(0x3a2814)); t.light(0.05f, 0.5f); t.write(T_PLANKS); }
+    // листва
+    { HDT t = mk(); hdLeaves(t, 19, {0x1d3d15, 0x2a5a1f, 0x387329, 0x478c34, 0x5ba443, 0x74bc58}, false); t.light(0.06f, 0.5f); t.write(T_LEAVES); }
+    { HDT t = mk(); hdLeaves(t, 34, {0x163322, 0x1f4730, 0x295c3e, 0x33704c, 0x40855c}, true); t.light(0.05f, 0.4f); t.write(T_PINE_LEAVES); }
+    // руды
+    { HDT t = mk(); hdOre(t, 21, c3(0x0a0a0c), c3(0x1c1c20), c3(0x3a3a42), c3(0x50505a), 5, 0.8f, true); t.light(0.08f, 0.55f); t.write(T_COAL_ORE); }
+    { HDT t = mk(); hdOre(t, 22, c3(0x7a4a2c), c3(0xc08a62), c3(0xe2b892), c3(0xfff0de), 4, 0.7f, false); t.light(0.08f, 0.55f); t.write(T_IRON_ORE); }
+    { HDT t = mk(); hdOre(t, 23, c3(0x8a5a08), c3(0xdca81c), c3(0xf8d84a), c3(0xfffbd0), 5, 0.55f, true); t.light(0.08f, 0.55f, true, 1.5f); t.write(T_GOLD_ORE); }
+    { HDT t = mk(); hdOre(t, 24, c3(0x0c6a76), c3(0x2cbcca), c3(0x8cf0f4), c3(0xffffff), 4, 0.75f, true); t.light(0.08f, 0.55f, true, 1.6f); t.write(T_DIAMOND_ORE); }
+    // кирпич, вулканит, металлы
+    { HDT t = mk(); Ramp rp({0x6c6e73, 0x7a7c81, 0x888a8f, 0x96989c}); hdBrick(t, 43, 2, 2, rp, c3(0x3c3d41), 0.02f, 0.05f);
+      Rng r(44); for (int i = 0; i < 1; i++) { float x = r.f() * R, y = r.f() * R, a = r.f() * 6.28f; for (int j = 0; j < 3; j++) { float nx = x + cosf(a) * k * 1.1f, ny = y + sinf(a) * k * 1.1f; t.groove(x, y, nx, ny, k * 0.2f, 0.25f, 0.4f); x = nx; y = ny; a += r.sf(); } }
+      t.light(0.08f, 0.55f); t.write(T_STONEBRICK); }
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          VR c = vor(u, v, 4, 44, 1.f); float f = clampf(c.f1 * 1.4f, 0, 1), n = fbm(u, v, 8, 3, 45);
+          C3 col = cmix(c3(0x0a0612), c3(0x2a1a42), (1.f - f) * 0.6f + n * 0.3f);
+          if (c.f2 - c.f1 < 0.04f) col = c3(0x5c3a9a);
+          HDT::put(p, col, (1.f - f) * 0.8f); });
+      t.light(0.08f, 0.4f, true, 1.8f); t.write(T_OBSIDIAN); }
+    { HDT t = mk(); hdMetal(t, 45, Ramp({0x7e8086, 0x9fa1a7, 0xbec0c5, 0xd8dade, 0xf0f1f3}), 0); t.light(0.08f, 0.4f, false, 1.5f); t.write(T_IRON_BLOCK); }
+    { HDT t = mk(); hdMetal(t, 46, Ramp({0x9a6c08, 0xc8941a, 0xe6b832, 0xf6d458, 0xfff0a8}), 1); t.light(0.08f, 0.4f, false, 1.5f); t.write(T_GOLD_BLOCK); }
+    { HDT t = mk(); hdMetal(t, 47, Ramp({0x14808c, 0x2eb0bc, 0x5cd2da, 0x94e8ec, 0xd8fbfc}), 2); t.light(0.08f, 0.4f, false, 1.6f); t.write(T_DIAMOND_BLOCK); }
+    // снег и лёд
+    Ramp snowR({0xc9d6e4, 0xdbe4ee, 0xe9eff6, 0xf5f8fb, 0xffffff});
+    { HDT t = mk(); t.each([&](int x, int y, float u, float v, float* p) { float n = fbm(u, v, 4, 5, 28); C3 c = snowR.at(0.35f + n * 0.6f); if (hv(x, y, 29) > 0.992f) c = c3(0xffffff); HDT::put(p, c, n); }); t.light(0.05f, 0.35f); t.write(T_SNOW); }
+    { HDT t = mk(); hdDirt(t, 11); hdOverhang(t, snowR, 29, 0.22f, 0.3f, c3(0xb8c6d4), false); t.light(0.06f, 0.5f); t.write(T_SNOW_SIDE); }
+    { HDT t = mk(); t.each([&](int x, int y, float u, float v, float* p) {
+          float n = fbm(u, v, 3, 4, 30), cr = ridged(u, v, 3, 3, 31);
+          C3 c = cmix(c3(0x7aa6e0), c3(0xc6defa), n * 0.7f + v * 0.2f);
+          if (cr > 0.86f) c = c3(0xeef6ff);
+          if (hv(x / 2, y / 2, 32) > 0.996f) c = c3(0xffffff);
+          HDT::put(p, c, cr > 0.86f ? -0.2f : n * 0.3f, 0.82f); });
+      t.light(0.04f, 0.2f, true, 1.4f); t.write(T_ICE); }
+    // кактус
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          float rib = 0.5f + 0.5f * cosf(u * 6.2831853f * 4.f), n = fbm(u, v, 4, 3, 36, 0.5f, 8);
+          HDT::put(p, cmix(c3(0x245a20), c3(0x5aa848), rib * 0.75f + n * 0.25f), rib); });
+      Rng r(37); for (int i = 0; i < 4; i++) for (int j = 0; j < 5; j++) {
+          float x = (i + 0.5f) / 4.f * R, y = (j + 0.3f + 0.4f * (i & 1)) / 5.f * R;
+          t.disc(x, y, k * 0.35f, c3(0xd8d0a0), 1.4f);
+          for (int sp = 0; sp < 3; sp++) { float a = -1.2f + sp * 1.2f + r.sf() * 0.3f; t.line(x, y, x + cosf(a) * k * 0.9f, y + sinf(a) * k * 0.9f, k * 0.12f, c3(0xf2ecd0), 1.6f); } }
+      t.light(0.07f, 0.5f); t.write(T_CACTUS_SIDE); }
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          float dx = u - 0.5f, dy = v - 0.5f, a = atan2f(dy, dx), rr = std::max(fabsf(dx), fabsf(dy));
+          float rib = 0.5f + 0.5f * cosf(a * 8.f);
+          C3 c = cmix(c3(0x245a20), c3(0x6cba56), rib * 0.6f + (0.5f - rr) * 0.8f);
+          if (rr > 0.46f) c = c3(0x2a6226);
+          HDT::put(p, c, rib * 0.5f + (0.5f - rr)); });
+      t.disc(R * 0.5f, R * 0.5f, k * 0.6f, c3(0xe6dca8), 1.5f);
+      t.light(0.06f, 0.4f, false); t.write(T_CACTUS_TOP); }
+    // стекло
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) {
+          float e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+          float n = fbm(u, v, 3, 3, 41);
+          if (e < 0.045f) HDT::put(p, cmix(c3(0x9fc4d4), c3(0xeef8fc), (u < 0.5f && v < 0.5f) ? 0.8f : 0.3f), 1.f - e * 8.f, 0.95f);
+          else HDT::put(p, cmix(c3(0xc4e2f0), c3(0xe8f6fc), n), 0.f, 0.14f + n * 0.06f); });
+      for (int i = 0; i < 3; i++) { float o = 0.18f + i * 0.09f; t.line(R * o, R * (o + 0.14f), R * (o + 0.14f), R * o, k * (i == 1 ? 0.5f : 0.25f), c3(0xffffff), 0.f, 0.75f, false); }
+      t.line(R * 0.62f, R * 0.84f, R * 0.84f, R * 0.62f, k * 0.3f, c3(0xffffff), 0.f, 0.6f, false);
+      t.light(0.05f, 0.f, false); t.write(T_GLASS); }
+    // растения (прозрачный фон)
+    { HDT t = mk(); t.clearAlpha(); Rng r(50);
+      for (int b = 0; b < 22; b++) {
+          float x = (0.05f + r.f() * 0.9f) * R, h = (0.35f + r.f() * 0.6f) * R, lean = r.sf() * 0.35f, w = k * (0.35f + r.f() * 0.25f);
+          float px = x, py = R - 0.5f;
+          for (int s2 = 1; s2 <= 12; s2++) { float tt = s2 / 12.f; float nx = x + lean * h * tt * tt, ny = R - 0.5f - h * tt;
+              t.line(px, py, nx, ny, w * (1.f - tt * 0.7f), cmix(c3(0x2f6a22), c3(0x8acf5c), tt), 0.5f + tt, 1.f, false); px = nx; py = ny; } }
+      t.light(0.04f, 0.3f, false); t.write(T_TALLGRASS); }
+    auto stem = [&](HDT& t, float x, float top, u32 seed) {
+        Rng r(seed);
+        t.line(x, R - 0.5f, x + r.sf() * k, top, k * 0.45f, c3(0x3d7a2c), 0.6f, 1.f, false);
+        for (int i = 0; i < 2; i++) { float ly = R * (0.75f - i * 0.15f), dir = i ? -1.f : 1.f;
+            t.line(x, ly, x + dir * k * 2.4f, ly - k * 1.6f, k * 0.6f, c3(0x4c9038), 0.8f, 1.f, false);
+            t.line(x + dir * k * 0.5f, ly - k * 0.3f, x + dir * k * 2.0f, ly - k * 1.3f, k * 0.2f, c3(0x6cb24e), 1.f, 1.f, false); }
+    };
+    { HDT t = mk(); t.clearAlpha(); stem(t, R * 0.5f, R * 0.4f, 51);
+      for (int i = 0; i < 6; i++) { float a = i * 1.0472f; t.disc(R * 0.5f + cosf(a) * k * 1.6f, R * 0.3f + sinf(a) * k * 1.6f, k * 1.35f, i < 3 ? c3(0xe8323c) : c3(0xc01e2a), 1.f, 1.f, true, false); }
+      t.disc(R * 0.5f, R * 0.3f, k * 0.9f, c3(0xf2c230), 1.6f, 1.f, true, false);
+      t.light(0.05f, 0.3f, false); t.write(T_FLOWER_R); }
+    { HDT t = mk(); t.clearAlpha(); stem(t, R * 0.5f, R * 0.42f, 52);
+      for (int i = 0; i < 18; i++) { float a = i * 0.349f; t.line(R * 0.5f, R * 0.3f, R * 0.5f + cosf(a) * k * 2.6f, R * 0.3f + sinf(a) * k * 2.6f, k * 0.55f, i % 2 ? c3(0xffe14a) : c3(0xf0c020), 1.f, 1.f, false); }
+      t.disc(R * 0.5f, R * 0.3f, k * 1.f, c3(0xd88a1c), 1.5f, 1.f, true, false);
+      t.light(0.05f, 0.3f, false); t.write(T_FLOWER_Y); }
+    { HDT t = mk(); t.clearAlpha(); t.line(R * 0.48f, R - 0.5f, R * 0.5f, R * 0.45f, k * 0.6f, c3(0x6e4b2c), 0.6f, 1.f, false);
+      Rng r(53); for (int i = 0; i < 14; i++) { float cx = R * (0.5f + r.sf() * 0.25f), cy = R * (0.32f + r.sf() * 0.2f); t.disc(cx, cy, k * (0.9f + r.f() * 0.6f), cmix(c3(0x2f6224), c3(0x7cc85a), r.f()), 1.f + r.f(), 1.f, true, false); }
+      t.light(0.05f, 0.4f, false); t.write(T_SAPLING); }
+    // верстак
+    { HDT t = mk(); hdPlanks(t, 60, plankR, c3(0x3a2814));
+      t.each([&](int, int, float u, float v, float* p) {
+          float e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+          if (e < 0.06f) HDT::put(p, cmix(c3(0x3a2614), c3(0x5a3f22), e * 16.f), 1.f - e * 4.f);
+          bool grid = (u > 0.2f && u < 0.8f && v > 0.2f && v < 0.8f) && (fabsf(u - 0.4f) < 0.008f || fabsf(u - 0.6f) < 0.008f || fabsf(v - 0.4f) < 0.008f || fabsf(v - 0.6f) < 0.008f || fabsf(u - 0.2f) < 0.008f || fabsf(u - 0.8f) < 0.008f || fabsf(v - 0.2f) < 0.008f || fabsf(v - 0.8f) < 0.008f);
+          if (grid) { p[0] *= 0.55f; p[1] *= 0.55f; p[2] *= 0.55f; p[4] -= 0.3f; } });
+      t.light(0.06f, 0.5f, false); t.write(T_CRAFT_TOP); }
+    { HDT t = mk(); hdPlanks(t, 61, plankR, c3(0x3a2814));
+      t.each([&](int, int, float u, float v, float* p) { if (v < 0.16f) { float n = fbm(u, v, 8, 3, 62); HDT::put(p, woodR.at(0.3f + n * 0.3f), 1.f - (v < 0.04f ? 0.f : 0.3f)); } });
+      // молоток и пила
+      t.line(R * 0.22f, R * 0.32f, R * 0.22f, R * 0.82f, k * 0.8f, c3(0x6e4b2c), 1.4f, 1.f, false);
+      t.line(R * 0.12f, R * 0.32f, R * 0.34f, R * 0.32f, k * 1.6f, c3(0x8f9297), 1.8f, 1.f, false);
+      t.line(R * 0.55f, R * 0.36f, R * 0.84f, R * 0.36f, k * 2.2f, c3(0xbfc3c8), 1.4f, 1.f, false);
+      for (int i = 0; i < 7; i++) t.disc(R * (0.56f + i * 0.045f), R * 0.43f, k * 0.35f, c3(0x9a9ea3), 1.2f, 1.f, false, false);
+      t.line(R * 0.85f, R * 0.36f, R * 0.88f, R * 0.6f, k * 1.f, c3(0x6e4b2c), 1.4f, 1.f, false);
+      t.light(0.06f, 0.5f, false); t.write(T_CRAFT_SIDE); }
+    // печь
+    Ramp fstone({0x55575c, 0x67696e, 0x797b80, 0x8b8d92});
+    { HDT t = mk(); hdBrick(t, 63, 4, 2, fstone, c3(0x2e2f33), 0.012f, 0.03f);
+      t.each([&](int, int, float, float v, float* p) { if (v < 0.06f || v > 0.94f) { HDT::put(p, v < 0.5f ? c3(0x9fa1a5) : c3(0x3c3d42), 1.f); } });
+      t.light(0.07f, 0.55f, false); t.write(T_FURN_SIDE); }
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) { float n = fbm(u, v, 6, 4, 64), e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+          float ring = fabsf(e - 0.2f) < 0.02f ? 1.f : 0.f;
+          HDT::put(p, fstone.at(0.4f + n * 0.5f - ring * 0.4f), clampf(e * 14.f, 0, 1) - ring * 0.6f + n * 0.2f); });
+      t.light(0.07f, 0.5f, false); t.write(T_FURN_TOP); }
+    auto furnFront = [&](bool lit) {
+        HDT t = mk(); hdBrick(t, 63, 4, 2, fstone, c3(0x2e2f33), 0.012f, 0.03f);
+        Ramp fire({0x7a1e06, 0xc8400c, 0xf27a18, 0xffb02e, 0xffe27a, 0xfff6c8});
+        t.each([&](int, int, float u, float v, float* p) {
+            if (v < 0.06f || v > 0.94f) { HDT::put(p, v < 0.5f ? c3(0x9fa1a5) : c3(0x3c3d42), 1.f); return; }
+            float ax = (u - 0.5f) / 0.32f, top = 0.38f;
+            bool arch = fabsf(ax) < 1.f && v > top - 0.12f * sqrtf(std::max(0.f, 1.f - ax * ax)) && v < 0.86f;
+            if (!arch) { float ad = fabsf(ax) - 1.f; if (fabsf(ax) < 1.12f && v > 0.24f && v < 0.88f && ad < 0.12f) { p[4] = 1.3f; p[0] *= 1.1f; p[1] *= 1.1f; p[2] *= 1.1f; } return; }
+            C3 c = c3(0x0c0c0e); float h = -0.8f;
+            if (lit) { float n = fbm(u, v, 6, 3, 66); float heat = clampf((v - 0.45f) * 2.2f + n * 0.5f - 0.2f, 0, 1); c = fire.at(heat); h = -0.4f; }
+            bool bar = v > 0.72f && fmodf(u * 10.f, 1.f) < 0.28f;
+            if (bar) { c = lit ? c3(0x5a3a2a) : c3(0x3a3b40); h = -0.2f; }
+            HDT::put(p, c, h);
+        });
+        t.light(0.07f, 0.55f, false);
+        return t;
+    };
+    { HDT t = furnFront(false); t.write(T_FURN_FRONT); }
+    { HDT t = furnFront(true); t.write(T_FURN_FRONT_LIT); }
+    // сундук
+    Ramp chestR({0x6e461e, 0x7f5226, 0x90602e, 0xa06c36, 0xae783e});
+    auto chestBase = [&](u32 seed, bool front, bool top) {
+        HDT t = mk(); hdPlanks(t, seed, chestR, c3(0x2e1c0a));
+        t.each([&](int, int, float u, float v, float* p) {
+            float e = std::min(std::min(u, 1 - u), std::min(v, 1 - v));
+            if (e < 0.055f) { HDT::put(p, cmix(c3(0x3a3b40), c3(0x75777d), (u < 0.5f && v < 0.5f) ? 0.7f : 0.3f), 1.4f); return; }
+            if (!top && fabsf(v - 0.37f) < 0.035f) HDT::put(p, c3(0x22160a), -0.5f);
+        });
+        const float cn[4][2] = {{0.03f, 0.03f}, {0.97f, 0.03f}, {0.03f, 0.97f}, {0.97f, 0.97f}};
+        for (auto& q : cn) t.disc(q[0] * R, q[1] * R, k * 0.45f, c3(0xb8babf), 2.f, 1.f, true, false);
+        if (front) {
+            t.each([&](int, int, float u, float v, float* p) { if (fabsf(u - 0.5f) < 0.09f && v > 0.27f && v < 0.52f) { float e2 = std::min(0.09f - fabsf(u - 0.5f), std::min(v - 0.27f, 0.52f - v)); HDT::put(p, cmix(c3(0x9a7414), c3(0xf2d066), clampf(e2 * 25.f, 0, 1)), 1.6f + e2 * 6.f); } });
+            t.disc(R * 0.5f, R * 0.42f, k * 0.35f, c3(0x1a1206), 0.f, 1.f, false, false);
+        }
+        t.light(0.07f, 0.5f, false);
+        return t;
+    };
+    { HDT t = chestBase(70, false, false); t.write(T_CHEST_SIDE); }
+    { HDT t = chestBase(71, false, true); t.write(T_CHEST_TOP); }
+    { HDT t = chestBase(70, true, false); t.write(T_CHEST_FRONT); }
+    // дверь
+    Ramp doorR({0x6e4f2c, 0x7d5a32, 0x8f683b, 0xa07645, 0xb0844f});
+    auto doorPart = [&](bool upper) {
+        HDT t = mk();
+        t.each([&](int, int, float u, float v, float* p) {
+            float g = fbm(u, v, 2, 4, 80, 0.55f, 20), n = pn(u, v, 6, 80, 81);
+            float gg = sinf(g * 18.f) * 0.5f + 0.5f;
+            C3 c = doorR.at(0.3f + gg * 0.3f + (n - 0.5f) * 0.2f);
+            float h = 0.6f;
+            bool frame = u < 0.12f || u > 0.88f || (upper ? v < 0.1f : v > 0.9f);
+            float pu0 = 0.22f, pu1 = 0.78f, pv0 = upper ? 0.2f : 0.1f, pv1 = upper ? 0.85f : 0.72f;
+            if (!frame && u > pu0 && u < pu1 && v > pv0 && v < pv1) {
+                float e = std::min(std::min(u - pu0, pu1 - u), std::min(v - pv0, pv1 - v));
+                h = 0.6f - clampf(e * 20.f, 0, 1) * 0.5f;
+                if (upper) {   // окно 2x2
+                    float wu = (u - 0.26f) / 0.48f, wv = (v - 0.25f) / 0.55f;
+                    if (wu > 0 && wu < 1 && wv > 0 && wv < 1 && fabsf(wu - 0.5f) > 0.05f && fabsf(wv - 0.5f) > 0.05f) {
+                        float shine = (fmodf(wu + wv * 0.6f, 0.5f) < 0.08f) ? 0.4f : 0.f;
+                        c = cmix(c3(0x8ab8d2), c3(0xd8eef8), clampf(1.f - wv + shine, 0, 1)); h = -0.3f;
+                    }
+                }
+            }
+            if (frame) { c = cmul(c, 0.85f); h = 0.8f; }
+            HDT::put(p, c, h);
+        });
+        if (!upper) { t.disc(R * 0.82f, R * 0.4f, k * 0.6f, c3(0xa0a2a6), 2.f, 1.f, true, false); t.disc(R * 0.82f, R * 0.4f, k * 0.25f, c3(0xe0e2e6), 2.4f, 1.f, true, false); }
+        t.light(0.07f, 0.5f, false);
+        return t;
+    };
+    { HDT t = doorPart(false); t.write(T_DOOR_LO); }
+    { HDT t = doorPart(true); t.write(T_DOOR_HI); }
+    // лестница
+    { HDT t = mk(); t.clearAlpha();
+      auto wood = [&](float x0, float y0, float x1, float y1, float w) { t.line(x0, y0, x1, y1, w, c3(0x9a7044), 1.f, 1.f, false); t.line(x0 - w * 0.2f, y0, x1 - w * 0.2f, y1, w * 0.3f, c3(0xb88a56), 1.4f, 1.f, false); };
+      wood(R * 0.17f, 0, R * 0.17f, (float)R, k * 1.6f); wood(R * 0.83f, 0, R * 0.83f, (float)R, k * 1.6f);
+      for (int i = 0; i < 4; i++) { float y = (i + 0.4f) * R / 4; wood(R * 0.12f, y, R * 0.88f, y, k * 1.3f);
+          t.disc(R * 0.17f, y, k * 0.35f, c3(0x4a4b50), 2.f, 1.f, true, false); t.disc(R * 0.83f, y, k * 0.35f, c3(0x4a4b50), 2.f, 1.f, true, false); }
+      t.light(0.06f, 0.5f, false); t.write(T_LADDER); }
+    // кровать (сбоку занята нижняя часть 9/16)
+    auto bedTop = [&](bool head) {
+        HDT t = mk(); hdWool(t, 90, c3(0xc93139), c3(0x8a1a22));
+        t.each([&](int, int, float u, float v, float* p) {
+            if (u < 0.05f || u > 0.95f) { HDT::put(p, c3(0x8a1a22), 0.3f); return; }
+            if (fmodf(u * 4.f, 1.f) < 0.04f || fmodf(v * 4.f, 1.f) < 0.04f) { p[0] *= 0.8f; p[1] *= 0.8f; p[2] *= 0.8f; p[4] -= 0.2f; }   // стёжка
+            if (head && v < 0.38f) { float pu = (u - 0.5f) / 0.42f, pv = (v - 0.19f) / 0.15f; float e = pu * pu + pv * pv;
+                if (e < 1.f) HDT::put(p, cmix(c3(0xd8d4c8), c3(0xfaf8f0), sqrtf(1.f - e)), 1.f + sqrtf(1.f - e)); else if (v < 0.4f) HDT::put(p, c3(0xe6e2d6), 0.6f); }
+        });
+        t.light(0.07f, 0.5f, false);
+        return t;
+    };
+    { HDT t = bedTop(false); t.write(T_BED_FOOT); }
+    { HDT t = bedTop(true); t.write(T_BED_HEAD); }
+    auto bedSide = [&](bool head) {
+        HDT t = mk(); t.clearAlpha();
+        t.each([&](int, int, float u, float v, float* p) {
+            if (v < 7.f / 16.f) return;
+            float n = fbm(u, v, 8, 3, 91);
+            if (v < 0.5f) HDT::put(p, head && u < 0.38f ? c3(0xf4f1e8) : c3(0xe8e4d8), 0.8f);
+            else if (v < 0.72f) HDT::put(p, cmix(c3(0x9a1e28), c3(0xc8303a), n), 0.7f + n * 0.3f);
+            else if (v < 0.78f) HDT::put(p, c3(0x7a1820), 0.3f);
+            else if (v < 0.86f) HDT::put(p, plankR.at(0.6f + n * 0.3f), 1.f);
+            else HDT::put(p, (u < 0.18f || u > 0.82f) ? plankR.at(0.3f + n * 0.2f) : c3(0x1e140c), (u < 0.18f || u > 0.82f) ? 1.f : -0.5f);
+        });
+        t.light(0.06f, 0.5f, false);
+        return t;
+    };
+    { HDT t = bedSide(false); t.write(T_BED_SIDE); }
+    { HDT t = bedSide(true); t.write(T_BED_SIDE_HEAD); }
+    // наковальня: тёмный кованый металл с царапинами и следами ударов
+    { HDT t = mk(); hdMetal(t, 230, Ramp({0x1e1f23, 0x2a2b30, 0x36373d, 0x44454c, 0x55565e}), 0);
+      Rng r(231); for (int i = 0; i < 9; i++) t.disc(r.f() * R, r.f() * R, k * (0.4f + r.f() * 0.5f), c3(0x2a2b30), -0.2f, 0.6f, true, false);
+      t.light(0.08f, 0.5f, false, 1.4f); t.write(T_ANVIL_SIDE); }
+    { HDT t = mk(); t.each([&](int, int, float u, float v, float* p) { float br = pn(u, v, 128, 3, 232), n = fbm(u, v, 4, 3, 233);
+          HDT::put(p, cmix(c3(0x34353b), c3(0x5c5d66), br * 0.5f + n * 0.4f), 0.5f + n * 0.2f); });
+      Rng r(234); for (int i = 0; i < 14; i++) { float x = r.f() * R, y = r.f() * R, a = r.sf() * 0.5f, L = k * (1.f + r.f() * 3.f);
+          t.line(x, y, x + cosf(a) * L, y + sinf(a) * L, k * 0.12f, c3(0x8a8c94), 0.6f, 0.8f, false); }
+      t.each([&](int, int, float u, float v, float* p) { float e = std::min(std::min(u, 1 - u), std::min(v, 1 - v)); if (e < 0.05f) { p[0] *= 1.25f; p[1] *= 1.25f; p[2] *= 1.25f; p[4] -= (0.05f - e) * 10.f; } });
+      t.light(0.07f, 0.4f, false, 1.5f); t.write(T_ANVIL_TOP); }
+    // трещины при копании
+    for (int st = 0; st < 5; st++) {
+        HDT t = mk(); t.clearAlpha(); Rng r(77);
+        int lines = 3 + st * 3;
+        for (int l = 0; l < lines; l++) {
+            float x = R * (0.5f + r.sf() * 0.15f), y = R * (0.5f + r.sf() * 0.15f), a = r.f() * 6.28f;
+            int segs = 3 + st * 2;
+            for (int j = 0; j < segs; j++) { float nx = x + cosf(a) * k * 1.3f, ny = y + sinf(a) * k * 1.3f;
+                t.line(x, y, nx, ny, k * (0.55f - j * 0.03f), c3(0x101010), 0.f, 0.85f, false); x = nx; y = ny; a += r.sf() * 0.7f; }
+        }
+        t.write(T_CRACK0 + st);
+    }
+}
+// анимированные вода и лава в высоком разрешении
+static void genHDAnim() {
+    const int R = g_tileRes;
+    Ramp wR({0x1e46b0, 0x2756c4, 0x3066d2, 0x3c78de, 0x4c8ae8, 0x7ab0f2});
+    Ramp fR({0x9aa8bc, 0xaab6c8, 0xbcc6d6, 0xced6e2, 0xe2e8f0, 0xf6f8fb});
+    Ramp lR({0x5a1404, 0x8f1f08, 0xc8380c, 0xf06a14, 0xfba52a, 0xffd04a, 0xfff2a8});
+    for (int f = 0; f < 16; f++) {
+        float sh = f / 16.f;
+        HDT w(R), fx(R), lv(R);
+        for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) {
+            float u = (x + 0.5f) / R, v = (y + 0.5f) / R;
+            float n1 = fbm(u + sh, v, 3, 3, 26), n2 = fbm(u, v + sh, 3, 3, 27);
+            float caust = 1.f - fabsf(n1 - n2) * 6.f; caust = clampf(caust, 0, 1); caust = caust * caust * caust;
+            float base = fbm(u - sh * 0.5f, v + sh * 0.5f, 2, 3, 28);
+            HDT::put(w.at(x, y), wR.at(0.25f + base * 0.4f + caust * 0.45f), 0.f);
+            HDT::put(fx.at(x, y), fR.at(0.3f + base * 0.35f + caust * 0.5f), 0.f);
+            VR c = vor(u + sh, v + sh * 0.5f, 4, 29, 0.9f);
+            float crack = clampf(1.f - (c.f2 - c.f1) * 5.f, 0, 1);
+            float heat = clampf(crack * 1.1f + fbm(u - sh, v, 4, 3, 30) * 0.35f - 0.1f, 0, 1);
+            HDT::put(lv.at(x, y), lR.at(heat), 0.f);
+        }
+        w.toVec(g_hdAnim[0][f]); fx.toVec(g_hdAnim[1][f]); lv.toVec(g_hdAnim[2][f]);
+    }
+}
+// прозрачные пиксели получают цвет соседей — без тёмной каймы при сглаживании
+static void dilateAtlas() {
+    const int R = g_tileRes, S = g_hdSize;
+    std::vector<u32> src;
+    for (int pass = 0; pass < 4; pass++) {
+        src = g_hdAtlas;
+        for (int y = 0; y < S; y++) for (int x = 0; x < S; x++) {
+            u32 c = src[(size_t)y * S + x];
+            if (pA(c) > 8) continue;
+            int tx0 = x / R * R, ty0 = y / R * R, rr = 0, gg = 0, bb = 0, n = 0;
+            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                int nx = x + dx, ny = y + dy;
+                if (nx < tx0 || ny < ty0 || nx >= tx0 + R || ny >= ty0 + R) continue;
+                u32 q = src[(size_t)ny * S + nx];
+                if (pA(q) > 8 || (pass > 0 && (pR(q) | pG(q) | pB(q)))) { rr += pR(q); gg += pG(q); bb += pB(q); n++; }
+            }
+            if (n) g_hdAtlas[(size_t)y * S + x] = RGBA(rr / n, gg / n, bb / n, pA(c));
+        }
+    }
+}
+// ---------------------------------------------------------------- рыбы и удочка: процедурный рисовальщик (любое разрешение)
+// вид рыбы сбоку, голова слева; координаты в долях полной длины рыбы (тело + хвост)
+struct FishFin { float t0, t1, h, slant; int shape; };   // shape: 0 — мягкий, 1 — колючий, 2 — округлый (жировой), 3 — длинный низкий
+struct FishSpec {
+    const char* raw; const char* cooked;
+    float Lb; float top[7], bot[7];
+    FishFin dors[2]; int nd; FishFin anal, pelv;
+    float tailH, fork; int tailRound;
+    float eyeT, eyeV, eyeR; u32 iris;
+    u32 dorsal, side, belly, finUp, finLow, finEdge;
+    int pattern; float scaleK, scaleSz;
+    float iconAng, iconLen;
+    float len3d;   // длина в мире, блоков
+};
+static const float FISH_T[7] = {0.f, 0.05f, 0.15f, 0.35f, 0.6f, 0.85f, 1.f};
+static const FishSpec FISH[4] = {
+    {"СЫРОЙ ОКУНЬ", "ЖАРЕНЫЙ ОКУНЬ", 0.80f, {0, .062f, .118f, .172f, .148f, .07f, .052f}, {0, .05f, .09f, .126f, .106f, .06f, .05f},
+     {{0.29f, 0.56f, 0.15f, 0.25f, 1}, {0.58f, 0.77f, 0.095f, 0.3f, 0}}, 2, {0.66f, 0.79f, 0.08f, 0.45f, 0}, {0.30f, 0.40f, 0.085f, 0.6f, 0},
+     0.15f, 0.36f, 0, 0.095f, 0.36f, 0.036f, 0xf0c434,
+     0x2f4a1c, 0x93a845, 0xf0e8c4, 0x7d8456, 0xe85a2a, 0x3a2a14, 0, 0.2f, 0.05f, 0.72f, 1.1f, 0.5f},
+    {"СЫРОЙ КАРАСЬ", "ЖАРЕНЫЙ КАРАСЬ", 0.80f, {0, .078f, .165f, .24f, .205f, .088f, .062f}, {0, .062f, .124f, .175f, .148f, .076f, .06f},
+     {{0.35f, 0.75f, 0.11f, 0.15f, 3}, {0, 0, 0, 0, 0}}, 1, {0.68f, 0.79f, 0.08f, 0.4f, 0}, {0.36f, 0.46f, 0.08f, 0.55f, 0},
+     0.17f, 0.26f, 0, 0.1f, 0.3f, 0.037f, 0xe0b448,
+     0x4e3c14, 0xc9952c, 0xf4de98, 0x9c5a2c, 0xc06a34, 0x40220e, 1, 0.15f, 0.05f, 0.66f, 0.98f, 0.42f},
+    {"СЫРАЯ ФОРЕЛЬ", "ЖАРЕНАЯ ФОРЕЛЬ", 0.82f, {0, .046f, .082f, .11f, .1f, .053f, .044f}, {0, .041f, .075f, .1f, .09f, .05f, .044f},
+     {{0.38f, 0.53f, 0.095f, 0.35f, 0}, {0.80f, 0.86f, 0.035f, 0.1f, 2}}, 2, {0.68f, 0.79f, 0.065f, 0.45f, 0}, {0.46f, 0.55f, 0.06f, 0.6f, 0},
+     0.12f, 0.12f, 0, 0.08f, 0.3f, 0.031f, 0xd0c8a4,
+     0x3c5a48, 0xbcc2b0, 0xf2f0e6, 0x7c7e64, 0x9a8a6c, 0x2c2c22, 2, 0.12f, 0.035f, 0.76f, 1.2f, 0.6f},
+    {"СЫРАЯ ЩУКА", "ЖАРЕНАЯ ЩУКА", 0.84f, {0, .022f, .042f, .061f, .071f, .053f, .043f}, {0, .025f, .047f, .065f, .069f, .051f, .043f},
+     {{0.76f, 0.905f, 0.07f, 0.3f, 0}, {0, 0, 0, 0, 0}}, 1, {0.77f, 0.905f, 0.065f, 0.3f, 0}, {0.55f, 0.62f, 0.05f, 0.6f, 0},
+     0.105f, 0.3f, 0, 0.1f, 0.5f, 0.026f, 0xe0c858,
+     0x22381a, 0x5d7c33, 0xeeead2, 0xa8642e, 0xb8702e, 0x2a1a0c, 3, 0.1f, 0.03f, 0.785f, 1.32f, 0.95f},
+};
+static float fishProf(const float* a, float t) {   // полувысота тела в точке t (0 — нос, 1 — хвостовой стебель)
+    t = clampf(t, 0.f, 1.f);
+    if (t < FISH_T[1]) return a[1] * sqrtf(t / FISH_T[1]);   // округлая морда
+    int i = 1; while (i < 5 && t > FISH_T[i + 1]) i++;
+    float k = (t - FISH_T[i]) / (FISH_T[i + 1] - FISH_T[i]); k = k * k * (3 - 2 * k);
+    return lerpf(a[i], a[i + 1], k);
+}
+static inline float sstep(float a, float b, float x) { return smooth01(a, b, x); }
+static float g_fishPx = 1.f / 16;   // размер пикселя рисуемого тайла (чтобы глаз не пропал на 16x16)
+// форма плавника: u — вдоль основания 0..1, возвращает высоту 0..1
+static float finShape(int shape, float u) {
+    if (u < 0 || u > 1) return 0;
+    switch (shape) {
+        case 1: { float s = powf(sinf(3.14159f * powf(u, 0.55f)), 0.6f) * (1.f - 0.25f * u);   // колючий: зубцы между лучами
+                  float sp = fabsf(cosf(u * 3.14159f * 6.5f)); return s * (0.72f + 0.28f * sp * sp); }
+        case 2: return sqrtf(std::max(0.f, 1.f - (2 * u - 1) * (2 * u - 1)));
+        case 3: { float s = u < 0.12f ? u / 0.12f : 1.f - 0.55f * (u - 0.12f); return s * (u > 0.93f ? (1 - u) / 0.07f : 1.f); }
+        default: return powf(sinf(3.14159f * powf(u, 0.5f)), 0.8f) * (1.f - 0.3f * u);
+    }
+}
+// цвет чешуи тела; X, Y — координаты в длинах рыбы, v — 1 спина .. -1 брюхо, t — 0..1 вдоль тела
+static C3 fishBody(const FishSpec& S, int sp, float t, float v, float X, float Y, bool cooked, bool flat) {
+    C3 dor = c3(S.dorsal), sid = c3(S.side), bel = c3(S.belly);
+    if (cooked) { dor = c3(0x6e3812); sid = c3(0xb46c28); bel = c3(0xe2b26a); }
+    C3 c = cmix(bel, sid, sstep(-0.75f, -0.05f, v));
+    c = cmix(c, dor, sstep(0.15f, 0.9f, v) * (cooked ? 0.7f : 1.f));
+    float pat = cooked ? 0.35f : 1.f;
+    switch (S.pattern) {
+        case 0: {   // окунь: тёмные поперечные полосы, шире у спины
+            if (t > 0.2f && t < 0.9f) {
+                float q = (t - 0.2f) / 0.7f * 6.f, f = q - floorf(q) - 0.5f;
+                float w = 0.17f + 0.13f * sstep(-0.4f, 0.9f, v);
+                float bar = (1.f - sstep(w * 0.6f, w, fabsf(f + 0.06f * v))) * sstep(-0.55f, -0.1f, v);
+                c = cmix(c, cooked ? c3(0x4a2408) : c3(0x22301a), bar * 0.75f * pat);
+            }
+            break;
+        }
+        case 1: {   // карась: золото с бронзой, отливает
+            float g = (fbm(X * 0.5f + 0.5f, Y * 0.5f + 0.5f, 16, 2, 77) - 0.5f) * 0.25f;
+            c = cmix(c, cooked ? c3(0xd09040) : c3(0xe6b850), sstep(0.2f, -0.4f, v) * 0.4f + g);
+            break;
+        }
+        case 2: {   // форель: розовая полоса, чёрные и красные пятнышки
+            float bandV = 0.05f - 0.1f * t;
+            float b = 1.f - sstep(0.12f, 0.3f, fabsf(v - bandV));
+            if (t > 0.15f) c = cmix(c, cooked ? c3(0xc87a50) : c3(0xdc7a8c), b * 0.75f);
+            float sc = 0.028f; int ix = ifloor(X / sc), iy = ifloor(Y / sc);
+            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                u32 h = hash3i(ix + dx, iy + dy, sp, 991);
+                if ((h & 7) > 2) continue;
+                float cx = (ix + dx + 0.5f + ((h >> 4) & 255) / 255.f * 0.6f - 0.3f) * sc, cy = (iy + dy + 0.5f + ((h >> 12) & 255) / 255.f * 0.6f - 0.3f) * sc;
+                float d = sqrtf((X - cx) * (X - cx) + (Y - cy) * (Y - cy)), r = sc * (0.22f + ((h >> 20) & 15) / 15.f * 0.12f);
+                float tv = v; bool red = ((h >> 24) & 7) < 2 && fabsf(tv - bandV) < 0.35f;
+                if (tv < -0.35f || t < 0.12f) continue;
+                if (red) { if (d < r * 1.7f) c = cmix(c, c3(0xf4f0e0), 0.7f * pat); if (d < r) c = cmix(c, cooked ? c3(0x8a3a1a) : c3(0xd8342a), pat); }
+                else if (d < r) c = cmix(c, cooked ? c3(0x3a1a08) : c3(0x16140e), 0.9f * pat);
+            }
+            break;
+        }
+        case 3: {   // щука: светлые продолговатые пятна рядами
+            if (t > 0.18f && v > -0.55f) {
+                float sx = 0.045f, sy = 0.022f; int ix = ifloor(X / sx), iy = ifloor(Y / sy);
+                float off = (iy & 1) ? 0.5f : 0.f; ix = ifloor(X / sx - off);
+                u32 h = hash3i(ix, iy, 3, 515);
+                float cx = (ix + off + 0.5f + ((h & 255) / 255.f - 0.5f) * 0.3f) * sx, cy = (iy + 0.5f) * sy;
+                float dx = (X - cx) / (sx * 0.34f), dy = (Y - cy) / (sy * 0.36f);
+                float d = dx * dx + dy * dy;
+                if (d < 1.f && (h >> 9 & 3)) c = cmix(c, cooked ? c3(0xd8a060) : c3(0xd6d88a), (1.f - sstep(0.5f, 1.f, d)) * 0.85f * pat);
+            }
+            break;
+        }
+    }
+    // чешуя: дуги, обращённые к хвосту
+    if (t > 0.2f && S.scaleK > 0) {
+        float s = S.scaleSz; float gy = Y / (s * 0.75f); int row = ifloor(gy);
+        float gx = X / s - ((row & 1) ? 0.5f : 0.f); int col = ifloor(gx);
+        float fx = gx - col, fy = gy - row;
+        float d = sqrtf((fx - 0.05f) * (fx - 0.05f) * 0.8f + (fy - 0.5f) * (fy - 0.5f));
+        float edge = sstep(0.42f, 0.56f, d) * sstep(0.2f, 0.6f, fx);
+        float shine = (1.f - sstep(0.f, 0.35f, d)) * 0.25f;
+        float k = S.scaleK * sstep(0.2f, 0.3f, t) * (cooked ? 0.5f : 1.f);
+        c = cmul(c, 1.f - edge * k + shine * k * 0.6f);
+    }
+    // боковая линия
+    {
+        float lv = 0.42f - 0.25f * t;
+        if (t > 0.2f && fabsf(v - lv) < 0.035f && (cooked || fmodf(X * 140.f, 1.f) < 0.6f)) c = cmix(c, cooked ? c3(0x5a2a0a) : cmix(sid, c3(0xffffff), 0.35f), 0.55f);
+    }
+    // жаберная крышка: дуга и чуть другой оттенок головы
+    {
+        float gT = S.eyeT * 2.25f + 0.02f;
+        float gx = gT + 0.045f * (1.f - v * v) - 0.01f;   // дуга выгнута к хвосту
+        float dx = t - gx;
+        if (dx < 0) c = cmix(c, cooked ? c3(0x8a4a18) : cmix(sid, c3(0xd8b860), S.pattern == 1 ? 0.35f : 0.15f), 0.35f);
+        if (fabsf(dx) < 0.014f && fabsf(v) < 0.85f) c = cmul(c, 0.55f);
+        else if (dx > 0 && dx < 0.03f && fabsf(v) < 0.85f) c = cmul(c, 1.12f);
+    }
+    // жареная: следы решётки и масляный блеск, кое-где подгорело
+    if (cooked) {
+        float g = (X * 0.8f + Y) * 9.f; float f = g - floorf(g);
+        if (f < 0.22f && t > 0.12f && t < 0.95f) c = cmix(c, c3(0x2e1406), 0.8f);
+        float burn = fbm(X * 3.f, Y * 3.f, 4, 3, 41) ; c = cmul(c, 0.85f + burn * 0.3f);
+    }
+    // объём: затемнение к краям, блик выше середины
+    if (!flat) {
+        float rim = sqrtf(std::max(0.f, 1.f - v * v));
+        c = cmul(c, 0.55f + 0.5f * rim);
+        float hl = expf(-((v - 0.48f) / 0.16f) * ((v - 0.48f) / 0.16f)) * (cooked ? 0.35f : 0.25f) * sstep(0.05f, 0.25f, t);
+        c = cmix(c, c3(0xffffff), hl);
+        if (fabsf(v) > 0.9f) c = cmul(c, 0.72f);
+    } else {
+        float rim = sqrtf(std::max(0.f, 1.f - v * v));
+        c = cmul(c, 0.82f + 0.2f * rim);
+    }
+    return c;
+}
+// плавник: along — вдоль основания, d — 0 у основания .. 1 на краю
+static C3 fishFinCol(const FishSpec& S, bool upper, float along, float d, bool cooked, bool spotOK) {
+    C3 base = c3(upper ? S.finUp : S.finLow);
+    if (cooked) base = cmix(base, c3(0x4a2408), 0.6f);
+    C3 c = cmix(base, c3(S.finEdge), sstep(0.55f, 1.05f, d) * 0.6f);
+    float ray = fabsf(fmodf(along * 14.f + d * 2.2f, 1.f) - 0.5f);
+    c = cmul(c, 0.78f + 0.3f * sstep(0.05f, 0.3f, ray));   // лучи плавника
+    if (spotOK && S.pattern == 3) { u32 h = hash3i(ifloor(along * 8.f), ifloor(d * 4.f), 7, 31); if ((h & 3) == 0) c = cmul(c, 0.6f); }
+    return c;
+}
+// хвост: s 0..1 от основания, a — -1 верх .. 1 низ; возвращает покрытие
+static float fishTailCover(const FishSpec& S, float s, float a, float ped) {
+    if (s < 0 || s > 1) return 0;
+    float span = ped + (1.f - ped) * powf(s, 0.7f);
+    if (fabsf(a) > span) return 0;
+    float aa = fabsf(a);
+    float smax = S.tailRound ? 1.f - 0.3f * aa * aa : 1.f - S.fork * powf(1.f - aa, 1.4f) - 0.06f * powf(aa, 6.f);
+    return s <= smax ? 1.f : 0.f;
+}
+// kind: 0 — сырая (значок), 1 — жареная (значок), 2 — кожа для 3D, 3 — спинной плавник, 4 — хвост
+static void fishSample(int kind, int sp, float x, float y, float* out) {
+    const FishSpec& S = FISH[sp];
+    out[0] = out[1] = out[2] = out[3] = 0;
+    bool cooked = kind == 1;
+    if (kind == 2) {   // развёртка кожи: x — вдоль тела, y — спина..брюхо
+        float t = x, v = 1.f - 2.f * y;
+        float X = t * S.Lb, Y = v > 0 ? -v * fishProf(S.top, t) : -v * fishProf(S.bot, t);
+        C3 c = fishBody(S, sp, t, v, X, Y, false, true);
+        if (t < 0.035f && fabsf(v + 0.1f) < 0.25f) c = cmul(c, 0.5f);   // рот
+        out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 1; return;
+    }
+    if (kind == 3) {   // спинные плавники в своей рамке: x — от начала первого до конца последнего, y — 0 край .. 1 основание
+        float a0 = S.dors[0].t0, a1 = S.dors[S.nd - 1].t1;
+        float t = a0 + x * (a1 - a0), hmax = 0; for (int i = 0; i < S.nd; i++) hmax = std::max(hmax, S.dors[i].h);
+        float d = (1.f - y) * hmax * 1.05f;   // высота над основанием
+        for (int i = 0; i < S.nd; i++) {
+            const FishFin& F = S.dors[i];
+            float u = (t - F.t0 - (d / F.h) * F.slant * (F.t1 - F.t0) * 0.5f) / (F.t1 - F.t0);
+            float fh = F.h * finShape(F.shape, u);
+            if (d <= fh) {
+                C3 c = fishFinCol(S, true, u, d / F.h, false, true);
+                if (sp == 0 && i == 0 && u > 0.62f && d / F.h > 0.25f) c = cmix(c, c3(0x14140c), 0.8f);   // чёрное пятно окуня
+                out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 0.93f; return;
+            }
+        }
+        return;
+    }
+    if (kind == 4) {   // хвост: x — от стебля к краю, y — верх..низ
+        float ped = (fishProf(S.top, 1.f) + fishProf(S.bot, 1.f)) * 0.5f / S.tailH;
+        float a = y * 2.f - 1.f;
+        if (fishTailCover(S, x, a, ped) > 0) {
+            C3 c = fishFinCol(S, false, (atan2f(a, x + 0.25f) + 1.6f) * 0.9f, x, false, true);
+            if (S.pattern == 0) c = cmix(c, c3(0x9a8a5a), 0.45f);
+            out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 0.95f;
+        }
+        return;
+    }
+    // значок: поворот и масштаб
+    float ca = cosf(S.iconAng), sa = sinf(S.iconAng);
+    float px = x - 0.5f, py = y - 0.5f;
+    float qx = px * ca - py * sa, qy = px * sa + py * ca;   // в систему рыбы (голова влево-вверх)
+    float L = S.iconLen;
+    float X = qx / L + 0.5f, Y = qy / L;
+    float yOff = (fishProf(S.bot, 0.4f) - fishProf(S.top, 0.4f)) * 0.5f;   // центрируем по высоте
+    Y -= yOff;
+    float t = X / S.Lb;
+    float finK = cooked ? 0.6f : 1.f;
+    // тело
+    if (t >= 0 && t <= 1.f) {
+        float ht = fishProf(S.top, t), hb = fishProf(S.bot, t);
+        if (Y >= -ht && Y <= hb) {
+            float v = Y < 0 ? -Y / std::max(ht, 1e-4f) : -Y / std::max(hb, 1e-4f);
+            C3 c = fishBody(S, sp, t, v, X, Y, cooked, false);
+            // грудной плавник поверх тела
+            {
+                float pt0 = S.eyeT * 2.25f + 0.05f, pl = 0.11f;
+                float u = (t - pt0) / pl, w = (v + 0.25f);
+                float sh = u > 0 && u < 1 ? (1 - u) * 0.35f * sinf(3.14159f * sqrtf(u)) : 0;
+                if (fabsf(w + u * 0.25f) < sh) {
+                    C3 f = fishFinCol(S, false, w * 2.f, u, cooked, false);
+                    c = cmix(c, f, cooked ? 0.6f : 0.75f);
+                }
+            }
+            // рот
+            float mY = (S.pattern == 3 ? 0.0f : 0.15f) * hb;
+            if (X < S.Lb * (S.pattern == 3 ? 0.11f : 0.045f) && fabsf(Y - mY) < 0.006f + 0.4f / (16.f * L) * 0.0f) c = cmul(c, 0.35f);
+            // глаз
+            float ex = S.eyeT * S.Lb, ey = -fishProf(S.top, S.eyeT) * S.eyeV;
+            float er = std::max(S.eyeR, g_fishPx * 0.95f / L), d = sqrtf((X - ex) * (X - ex) + (Y - ey) * (Y - ey));
+            if (d < er * 1.15f) c = cmul(c, 0.55f);   // тёмный ободок
+            if (d < er) {
+                C3 iris = cooked ? c3(0xe8e2d4) : c3(S.iris);
+                float r = d / er;
+                c = cmix(iris, cmul(iris, 0.6f), r);
+                if (r < (cooked ? 0.35f : 0.58f)) c = cooked ? c3(0x8a8270) : c3(0x0a0a0c);
+                float hx = X - (ex - er * 0.32f), hy = Y - (ey - er * 0.32f);
+                if (!cooked && hx * hx + hy * hy < er * er * 0.09f) c = c3(0xffffff);
+            }
+            out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 1; return;
+        }
+    }
+    // плавники за телом: спинные
+    for (int i = 0; i < S.nd; i++) {
+        const FishFin& F = S.dors[i];
+        float tt = clampf(t, 0.f, 1.f), base = -fishProf(S.top, tt), dd = base - Y;
+        if (dd < -0.01f) continue;
+        float u = (t - F.t0 - (dd / F.h) * F.slant * (F.t1 - F.t0) * 0.5f) / (F.t1 - F.t0);
+        float fh = F.h * finK * finShape(F.shape, u);
+        if (dd <= fh) {
+            C3 c = fishFinCol(S, true, u, dd / (F.h * finK), cooked, true);
+            if (sp == 0 && i == 0 && u > 0.62f && dd / F.h > 0.25f && !cooked) c = cmix(c, c3(0x14140c), 0.8f);
+            out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 1; return;
+        }
+    }
+    // нижние: анальный и брюшной
+    const FishFin* low[2] = {&S.anal, &S.pelv};
+    for (int i = 0; i < 2; i++) {
+        const FishFin& F = *low[i];
+        float tt = clampf(t, 0.f, 1.f), base = fishProf(S.bot, tt), dd = Y - base;
+        if (dd < -0.01f) continue;
+        float u = (t - F.t0 - (dd / F.h) * F.slant * (F.t1 - F.t0)) / (F.t1 - F.t0);
+        float fh = F.h * finK * finShape(F.shape, u);
+        if (dd <= fh) { C3 c = fishFinCol(S, false, u, dd / (F.h * finK), cooked, true); out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 1; return; }
+    }
+    // хвост
+    {
+        float s = (X - S.Lb + 0.01f) / (1.f - S.Lb + 0.01f);
+        float cy = (fishProf(S.bot, 1.f) - fishProf(S.top, 1.f)) * 0.5f;
+        float ped = (fishProf(S.top, 1.f) + fishProf(S.bot, 1.f)) * 0.5f / S.tailH;
+        float a = (Y - cy) / S.tailH;
+        if (fishTailCover(S, s, a, ped) > 0) {
+            C3 c = fishFinCol(S, false, (atan2f(a, s + 0.25f) + 1.6f) * 0.9f, s, cooked, true);
+            if (S.pattern == 0) c = cmix(c, c3(0x9a8a5a), 0.45f);
+            if (cooked) c = cmix(c, c3(0x2a1206), sstep(0.5f, 1.f, s) * 0.7f);
+            out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = 1;
+        }
+    }
+}
+// удочка: рукоять с пробкой внизу слева, катушка, удилище с кольцами к верхнему правому углу, леска с поплавком
+static void rodSample(float x, float y, float* out, bool withLine = true) {
+    out[0] = out[1] = out[2] = out[3] = 0;
+    auto segDist = [](float px, float py, float ax, float ay, float bx, float by, float& tt) {
+        float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+        tt = clampf(((px - ax) * dx + (py - ay) * dy) / l2, 0.f, 1.f);
+        float qx = ax + dx * tt - px, qy = ay + dy * tt - py; return sqrtf(qx * qx + qy * qy);
+    };
+    const float ax = 0.09f, ay = 0.91f, bx = 0.9f, by = 0.08f;   // от торца рукояти к кончику
+    C3 c; bool hit = false;
+    // леска: с кончика вниз, с лёгким провисом, к поплавку
+    if (withLine) {
+        float t; float lx0 = bx, ly0 = by, lx1 = 0.84f, ly1 = 0.72f;
+        float d = segDist(x, y, lx0, ly0, lx1, ly1, t);
+        float bow = sinf(t * 3.14159f) * 0.035f; d = fabsf((x - (lx0 + (lx1 - lx0) * t)) - bow);
+        if (fabsf(y - (ly0 + (ly1 - ly0) * t)) < 0.02f || d < 0.02f) {}
+        if (d < std::max(0.017f, g_fishPx * 0.6f) && y > ly0 && y < ly1) { c = c3(0xdcdcd8); hit = true; }
+        // поплавок: красный низ, белый верх, тёмная антенна
+        float fx = lx1, fy = ly1 + 0.07f, dx = x - fx, dy = y - fy;
+        if (dx * dx / (0.055f * 0.055f) + dy * dy / (0.075f * 0.075f) < 1.f) { c = dy < -0.005f ? c3(0xf2f0ea) : c3(0xd42a22); float r = sqrtf(dx * dx + dy * dy) / 0.07f; c = cmul(c, 1.05f - 0.35f * r); if (dx < -0.015f && dy < -0.02f) c = cmix(c, c3(0xffffff), 0.5f); hit = true; }
+        if (fabsf(dx) < 0.012f && dy > -0.12f && dy < -0.07f) { c = c3(0x2a2a2a); hit = true; }
+    }
+    // удилище
+    float t; float d = segDist(x, y, ax, ay, bx, by, t);
+    float w = lerpf(0.05f, 0.016f, t);
+    if (t > 0.3f) w = lerpf(0.032f, 0.016f, (t - 0.3f) / 0.7f);
+    w = std::max(w, g_fishPx * 0.8f);
+    if (d < w) {
+        float side = ((x - ax) * (by - ay) - (y - ay) * (bx - ax)) > 0 ? 1.f : -1.f;   // для блика
+        float k = d / w * side;
+        if (t < 0.3f) {   // пробковая рукоять с тёмным торцом
+            c = t < 0.05f ? c3(0x2a2420) : c3(0xc49a64);
+            if (t >= 0.05f) { float n = hv(ifloor(x * 90), ifloor(y * 90), 5); c = cmul(c, 0.82f + n * 0.3f); if (fmodf(t * 30.f, 1.f) < 0.12f) c = cmul(c, 0.75f); }
+            if (t > 0.26f) c = c3(0x8a8a90);   // металлическое кольцо
+        } else {
+            c = cmix(c3(0x7a4a24), c3(0x5a3418), t);   // удилище: лакированное дерево
+            if (fmodf(t * 5.2f, 1.f) < 0.06f) c = c3(0x1e1e22);   // обмотка у колец
+        }
+        c = cmul(c, 1.f - 0.35f * fabsf(k)); if (k < -0.2f && k > -0.6f) c = cmix(c, c3(0xffffff), 0.25f);
+        hit = true;
+    }
+    // кольца-пропускники
+    for (int i = 0; i < (withLine ? 3 : 0); i++) {
+        float gt = 0.45f + i * 0.19f, gx = ax + (bx - ax) * gt + 0.03f, gy = ay + (by - ay) * gt + 0.03f;
+        float dd = sqrtf((x - gx) * (x - gx) + (y - gy) * (y - gy));
+        if (dd < 0.026f && dd > 0.012f) { c = c3(0xb8bcc4); hit = true; }
+    }
+    // катушка сбоку от рукояти
+    {
+        float cx = ax + (bx - ax) * 0.33f + 0.075f, cy = ay + (by - ay) * 0.33f + 0.075f;
+        float dd = sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy));
+        if (dd < 0.085f) {
+            c = dd < 0.03f ? c3(0x50545c) : (dd < 0.065f ? c3(0xd8dbe2) : c3(0x7a7e88));
+            if (dd > 0.03f && dd < 0.065f && fmodf(atan2f(y - cy, x - cx) * 3.f, 1.f) < 0.15f) c = c3(0xa8acb4);
+            c = cmul(c, 1.1f - 0.4f * ((x - cx) + (y - cy)) / 0.12f * 0.5f);
+            hit = true;
+        }
+        float hx = cx + 0.06f, hy = cy + 0.09f;   // ручка катушки
+        if (fabsf(x - hx) < 0.02f && fabsf(y - hy) < 0.03f) { c = c3(0x2a2a2e); hit = true; }
+    }
+    if (hit) { out[0] = clampf(c.r, 0, 1); out[1] = clampf(c.g, 0, 1); out[2] = clampf(c.b, 0, 1); out[3] = 1; }
+}
+// пишет тайл в атлас 16x16 (R = 16) или в HD-атлас (R = g_tileRes)
+template <class F> static void paintTileSS(int tile, int R, int ss, bool hard, F f) {
+    for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) {
+        float acc[4] = {0, 0, 0, 0};
+        for (int j = 0; j < ss; j++) for (int i = 0; i < ss; i++) {
+            float o[4]; f((x + (i + 0.5f) / ss) / R, (y + (j + 0.5f) / ss) / R, o);
+            acc[0] += o[0] * o[3]; acc[1] += o[1] * o[3]; acc[2] += o[2] * o[3]; acc[3] += o[3];
+        }
+        float a = acc[3] / (ss * ss);
+        u32 px = 0;
+        if (acc[3] > 0) {
+            float r = acc[0] / acc[3], g = acc[1] / acc[3], b = acc[2] / acc[3];
+            float aa = hard ? (a > 0.42f ? 1.f : 0.f) : a;
+            px = RGBA((int)(clampf(r, 0, 1) * 255.f + 0.5f), (int)(clampf(g, 0, 1) * 255.f + 0.5f), (int)(clampf(b, 0, 1) * 255.f + 0.5f), (int)(aa * 255.f + 0.5f));
+        }
+        if (R == 16) g_atlasPx[((tile >> 4) * 16 + y) * ATLAS + (tile & 15) * 16 + x] = px;
+        else g_hdAtlas[(size_t)((tile >> 4) * R + y) * g_hdSize + (tile & 15) * R + x] = px;
+    }
+}
+static void genFishTiles(int R) {
+    int ss = R <= 16 ? 6 : (R <= 32 ? 4 : 3);
+    g_fishPx = 1.f / R;
+    bool hard = R <= 32;   // мелкие значки — с чёткими пиксельными краями
+    for (int sp = 0; sp < 4; sp++) {
+        paintTileSS(T_FISH0 + sp, R, ss, hard, [&](float x, float y, float* o) { fishSample(0, sp, x, y, o); });
+        paintTileSS(T_FFRY0 + sp, R, ss, hard, [&](float x, float y, float* o) { fishSample(1, sp, x, y, o); });
+        paintTileSS(T_FSKIN0 + sp, R, std::max(2, ss - 1), false, [&](float x, float y, float* o) { fishSample(2, sp, x, y, o); });
+        paintTileSS(T_FFIN0 + sp, R, ss, false, [&](float x, float y, float* o) { fishSample(3, sp, x, y, o); });
+        paintTileSS(T_FTAIL0 + sp, R, ss, false, [&](float x, float y, float* o) { fishSample(4, sp, x, y, o); });
+    }
+    paintTileSS(T_ROD, R, ss, hard, [&](float x, float y, float* o) { rodSample(x, y, o); });
+    for (int sp = 0; sp < 4; sp++)   // круглый глаз: радужка, зрачок, блик
+        paintTileSS(T_FEYE0 + sp, R, ss, false, [&](float x, float y, float* o) {
+            float dx = x - 0.5f, dy = y - 0.5f, d = sqrtf(dx * dx + dy * dy) * 2.f;
+            o[3] = d < 1.f ? 1.f : 0.f;
+            C3 ir = c3(FISH[sp].iris), c = d > 0.86f ? c3(0x101010) : cmix(ir, cmul(ir, 0.55f), d);
+            if (d < 0.5f) c = c3(0x060608);
+            float hx = dx + 0.17f, hy = dy + 0.17f; if (hx * hx + hy * hy < 0.012f) c = c3(0xffffff);
+            if (d > 0.5f && d < 0.86f && fmodf(atan2f(dy, dx) * 4.f + 10.f, 1.f) < 0.12f) c = cmul(c, 0.8f);   // прожилки радужки
+            o[0] = c.r; o[1] = c.g; o[2] = c.b; });
+    paintTileSS(T_ROD_HAND, R, ss, hard, [&](float x, float y, float* o) { rodSample(x, y, o, false); });   // в руке — без лески: настоящая леска тянется к поплавку
+}
+
+static void buildHDAtlas(int res) {
+    genFishTiles(16);
+    g_tileRes = res; g_hdSize = 16 * res;
+    g_hdAtlas.assign((size_t)g_hdSize * g_hdSize, 0);
+    for (int y = 0; y < g_hdSize; y++) for (int x = 0; x < g_hdSize; x++) g_hdAtlas[(size_t)y * g_hdSize + x] = g_atlasPx[(y * 16 / res) * ATLAS + x * 16 / res];
+    if (res > 16) {
+        genHDBlocks();
+        genHDAnim();
+        genFishTiles(res);
+        dilateAtlas();
+    } else for (int a = 0; a < 3; a++) for (int f = 0; f < 16; f++) g_hdAnim[a][f].clear();
 }
 
 // ============================================================================
@@ -1100,7 +2413,7 @@ enum { AUDIO_RATE = 22050, MAX_VOICES = 24 };
 enum Snd {
     SND_STEP0 = 0, SND_DIG0 = 6, SND_BREAK0 = 12,
     SND_PLACE = 18, SND_PICKUP, SND_HIT, SND_HURT, SND_CLICK, SND_SPLASH, SND_TOPTUN, SND_PUKH, SND_GNIL, SND_TEN,
-    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW,
+    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW, SND_ANVIL, SND_ENCH, SND_CAST, SND_BITE, SND_REEL, SND_FLOP,
     SND_MATVAR,                     // ещё по 2 варианта каждого звука материала (шаги, копание, разрушение)
     SND_COUNT = SND_MATVAR + 36
 };
@@ -1300,7 +2613,32 @@ static void genSounds() {
     { Synth s(0.06f, 44); s.tone(0, 0.06f, 1200, 900, 0.35f, 0.001f, 0.015f, 2); g_snd[SND_CLICK] = s.b; }
     { Synth s(0.5f, 45); s.noise(0, 0.5f, 0.8f, 0.5f, 0.05f, 0.01f, 0.12f); g_snd[SND_SPLASH] = s.b; }
     { Synth s(0.6f, 46); s.tone(0, 0.6f, 95, 70, 0.6f, 0.05f, 0.25f, 1); s.tone(0, 0.6f, 190, 140, 0.2f, 0.05f, 0.2f); g_snd[SND_TOPTUN] = s.b; }
-    { Synth s(0.25f, 47); s.tone(0, 0.1f, 900, 1400, 0.35f, 0.005f, 0.04f); s.tone(0.12f, 0.24f, 1000, 1500, 0.3f, 0.005f, 0.04f); g_snd[SND_PUKH] = s.b; }
+    { MatSynth s(0.5f, 47);   // утка: два носовых «кря»
+      for (int q = 0; q < 2; q++) { float t0 = q * 0.22f;
+          for (int h = 1; h <= 6; h++) s.thump(t0, 330.f * h * 1.02f, 300.f * h, 0.055f, 0.32f / h * (h == 3 || h == 4 ? 2.2f : 1.f));
+          s.grain(t0, 1400, 3.f, 0.03f, 0.35f); s.grain(t0, 2600, 4.f, 0.02f, 0.2f); }
+      s.normalize(0.6f); g_snd[SND_PUKH] = s.b; }
+    { MatSynth s(0.9f, 48);   // наковальня: звонкий металлический удар с негармоническими обертонами
+      const float fr[5] = {620, 1480, 2390, 3170, 4420}, dc[5] = {0.28f, 0.2f, 0.14f, 0.1f, 0.06f};
+      for (int i = 0; i < 5; i++) s.thump(0, fr[i] * 1.01f, fr[i], dc[i], 0.5f / (1 + i * 0.4f));
+      s.grain(0, 3000, 2.f, 0.004f, 0.8f); s.normalize(0.7f); g_snd[SND_ANVIL] = s.b; }
+    { MatSynth s(1.0f, 49);   // зачарование: мерцающий перелив
+      for (int i = 0; i < 9; i++) { float f = 880.f * powf(1.12246f, (float)((i * 5) % 12)); s.thump(i * 0.07f, f, f, 0.18f, 0.25f); }
+      s.normalize(0.5f); g_snd[SND_ENCH] = s.b; }
+    { Synth s(0.45f, 60);   // заброс: свист удилища и шуршание лески
+      s.noise(0, 0.4f, 0.55f, 0.18f, 0.03f, 0.09f, 0.12f); s.noise(0.05f, 0.45f, 0.25f, 0.6f, 0.2f, 0.02f, 0.15f);
+      s.tone(0.02f, 0.4f, 1800, 700, 0.06f, 0.05f, 0.15f, 1); g_snd[SND_CAST] = s.b; }
+    { MatSynth m(0.5f, 61);   // поклёвка: «бульк» — пузырь с восходящим тоном и всплеск
+      m.thump(0, 260, 820, 0.09f, 0.6f); m.thump(0.06f, 420, 1100, 0.06f, 0.3f);
+      for (int i = 0; i < 10; i++) m.grain(0.03f + i * 0.02f, 1800.f + 300.f * (i % 4), 2.f, 0.006f, 0.25f * (1.f - i / 10.f));
+      m.normalize(0.6f); g_snd[SND_BITE] = m.b;
+      Synth s2(0.5f, 62); s2.noise(0, 0.45f, 0.45f, 0.5f, 0.06f, 0.01f, 0.1f); for (size_t i = 0; i < s2.b.size() && i < g_snd[SND_BITE].size(); i++) g_snd[SND_BITE][i] += s2.b[i] * 0.5f; }
+    { MatSynth m(0.45f, 63);   // катушка: трещотка
+      for (int i = 0; i < 14; i++) { float t = i * 0.03f; m.grain(t, 3200.f + (i & 1) * 400.f, 3.f, 0.003f, 0.55f); m.thump(t, 900, 700, 0.01f, 0.12f); }
+      m.normalize(0.45f); g_snd[SND_REEL] = m.b; }
+    { MatSynth m(0.25f, 64);   // рыба бьётся: мокрый шлепок
+      m.thump(0, 190, 80, 0.04f, 0.7f); m.grain(0, 1300, 1.2f, 0.02f, 0.6f); m.grain(0.01f, 2600, 2.f, 0.01f, 0.3f);
+      m.normalize(0.55f); g_snd[SND_FLOP] = m.b; }
     { Synth s(0.7f, 48); s.tone(0, 0.7f, 80, 60, 0.5f, 0.1f, 0.3f, 2); s.noise(0, 0.7f, 0.25f, 0.1f, 0.0f, 0.1f, 0.3f); g_snd[SND_GNIL] = s.b; }
     { Synth s(0.6f, 49); s.noise(0, 0.6f, 0.4f, 0.9f, 0.3f, 0.1f, 0.2f); s.tone(0, 0.6f, 600, 300, 0.15f, 0.05f, 0.2f); g_snd[SND_TEN] = s.b; }
     { Synth s(0.25f, 50); for (int k = 0; k < 3; k++) s.noise(k * 0.08f, k * 0.08f + 0.07f, 0.6f, 0.3f, 0.02f, 0.002f, 0.02f); g_snd[SND_EAT] = s.b; }
@@ -2102,6 +3440,19 @@ static void buildSection(Chunk* c, int s) {
                 emitBox(out, x, y, z, x0, 0, z0, x1, 1, z1, tiles, sky, bl, 0, upper ? 8 : 4);
                 break;
             }
+            case SH_ANVIL: {   // основание, шейка и длинная рабочая плита; поворот по meta
+                const int tl[6] = {T_ANVIL_SIDE, T_ANVIL_SIDE, T_ANVIL_TOP, T_ANVIL_SIDE, T_ANVIL_SIDE, T_ANVIL_SIDE};
+                bool alongZ = (m & 1) != 0;
+                auto box = [&](float a0, float y0, float b0, float a1, float y1, float b1) {
+                    if (alongZ) emitBox(out, x, y, z, b0 / 16.f, y0 / 16.f, a0 / 16.f, b1 / 16.f, y1 / 16.f, a1 / 16.f, tl, sky, bl, 0);
+                    else emitBox(out, x, y, z, a0 / 16.f, y0 / 16.f, b0 / 16.f, a1 / 16.f, y1 / 16.f, b1 / 16.f, tl, sky, bl, 0);
+                };
+                box(2, 0, 2, 14, 3, 14);      // основание
+                box(4, 3, 3, 12, 5, 13);      // ступень
+                box(5.5f, 5, 5, 10.5f, 10, 11); // шейка
+                box(0, 10, 3, 16, 16, 13);    // плита
+                break;
+            }
             case SH_BED: {
                 bool head = (m & 4) != 0;
                 int tiles[6] = {T_BED_SIDE, T_BED_SIDE, head ? T_BED_HEAD : T_BED_FOOT, T_PLANKS, T_BED_SIDE, T_BED_SIDE};
@@ -2288,7 +3639,8 @@ static void emitQuadRel(const float (*W)[3], const float (*UV)[2], const float (
     emitQuadCam(P, UV, C, keyBias);
 }
 static inline void tileUV(int tile, float pu, float pv, float* o) {
-    pu = clampf(pu, 0.03f, 15.97f); pv = clampf(pv, 0.03f, 15.97f);
+    const float in = std::max(0.03f, 8.f / g_tileRes);   // полтекселя от края — без затекания соседних тайлов при сглаживании
+    pu = clampf(pu, in, 16.f - in); pv = clampf(pv, in, 16.f - in);
     o[0] = ((tile & 15) * 16 + pu) / (float)ATLAS;
     o[1] = ((tile >> 4) * 16 + pv) / (float)ATLAS;
 }
@@ -2622,7 +3974,7 @@ static void drawSky() {
         float sx = c.cx + p[0] / p[2] * c.focal, sy = c.cy - p[1] / p[2] * c.focal;
         float size = c.focal * (body ? 0.10f : 0.16f) / p[2];
         int tile = body ? T_MOON : T_SUN;
-        SDL_Rect src = {(tile & 15) * 16, (tile >> 4) * 16, 16, 16};
+        SDL_Rect src = {(tile & 15) * g_tileRes, (tile >> 4) * g_tileRes, g_tileRes, g_tileRes};
         SDL_Rect dst = {(int)(sx - size / 2), (int)(sy - size / 2), (int)size, (int)size};
         SDL_SetTextureColorMod(g_atlasTex, 255, 255, 255);
         SDL_SetTextureAlphaMod(g_atlasTex, 255);
@@ -2651,15 +4003,22 @@ static void initAnimTiles() {
         }
     }
 }
-static void uploadTile(int tile, const u32* px) {
-    int tx = (tile & 15) * 16, ty = (tile >> 4) * 16;
-    for (int y = 0; y < 16; y++) memcpy(&g_atlasPx[(ty + y) * ATLAS + tx], px + y * 16, 64);
-    if (g_atlasTex) { SDL_Rect r = {tx, ty, 16, 16}; SDL_UpdateTexture(g_atlasTex, &r, px, 64); }
+static void uploadTile(int tile, const u32* px16, int which, int frame) {
+    const int R = g_tileRes;
+    const u32* px = px16;
+    std::vector<u32> up;
+    if (R > 16) {
+        if (!g_hdAnim[which][frame].empty()) px = g_hdAnim[which][frame].data();
+        else { up.resize((size_t)R * R); for (int y = 0; y < R; y++) for (int x = 0; x < R; x++) up[(size_t)y * R + x] = px16[(y * 16 / R) * 16 + x * 16 / R]; px = up.data(); }
+    }
+    int tx = (tile & 15) * R, ty = (tile >> 4) * R;
+    if ((int)g_hdAtlas.size() == g_hdSize * g_hdSize) for (int y = 0; y < R; y++) memcpy(&g_hdAtlas[(size_t)(ty + y) * g_hdSize + tx], px + (size_t)y * R, (size_t)R * 4);
+    if (g_atlasTex) { SDL_Rect r = {tx, ty, R, R}; SDL_UpdateTexture(g_atlasTex, &r, px, R * 4); }
 }
 static void updateAnimTiles(float t) {
     int fw = g_shaders ? ((int)(t * 7.f)) & 15 : 0, fl = g_shaders ? ((int)(t * 4.f)) & 15 : 0;
-    if (fw != g_animFrameW) { uploadTile(T_WATER, g_animWater[fw]); uploadTile(T_WATER_FX, g_animWaterFX[fw]); g_animFrameW = fw; }
-    if (fl != g_animFrameL) { uploadTile(T_LAVA, g_animLava[fl]); g_animFrameL = fl; }
+    if (fw != g_animFrameW) { uploadTile(T_WATER, g_animWater[fw], 0, fw); uploadTile(T_WATER_FX, g_animWaterFX[fw], 1, fw); g_animFrameW = fw; }
+    if (fl != g_animFrameL) { uploadTile(T_LAVA, g_animLava[fl], 2, fl); g_animFrameL = fl; }
 }
 static void createGlowTexture() {
     if (g_glowTex) SDL_DestroyTexture(g_glowTex);
@@ -2873,6 +4232,7 @@ static std::string g_msg; static float g_msgT = 0;
 // всплывающее название предмета в инвентаре
 static std::string g_tipText; static float g_tipX = 0, g_tipY = 0; static Uint32 g_tipUntil = 0;
 static void showTip(int id, float x, float y) { if (id <= 0) return; g_tipText = itemName(id); g_tipX = x; g_tipY = y; g_tipUntil = SDL_GetTicks() + 2200; }
+static void showTipS(const Stack& s, float x, float y) { if (s.empty()) return; g_tipText = stackName(s); g_tipX = x; g_tipY = y; g_tipUntil = SDL_GetTicks() + 2600; }
 // «+3 УГОЛЬ» над панелью, когда что-то подобрал
 struct PickNote { int id, cnt; float t; };
 static std::vector<PickNote> g_picks;
@@ -2894,6 +4254,7 @@ struct Player {
     float bobPhase = 0, bobAmt = 0, stepDist = 0;
     int spawnX = 0, spawnY = 80, spawnZ = 0;
     Stack inv[36]; int sel = 0;
+    Stack armor[4];   // шлем, нагрудник, поножи, ботинки
     bool dead = false;
     float swing = 0;   // анимация взмаха
     float eatT = 0;
@@ -2910,7 +4271,7 @@ static int addItem(Stack s) {   // возвращает остаток
         for (int i = 0; i < 36 && s.cnt > 0; i++) {
             Stack& d = P.inv[i];
             if (pass == 0) {
-                if (d.empty() || d.id != s.id || ms == 1) continue;
+                if (d.empty() || d.id != s.id || d.ench != s.ench || ms == 1) continue;
                 int can = std::min((int)s.cnt, ms - d.cnt);
                 if (can > 0) { d.cnt += can; s.cnt -= can; }
             } else if (d.empty()) {
@@ -2931,9 +4292,10 @@ static void removeItem(int id, int n) {
 static Stack& heldStack() { return P.inv[P.sel]; }
 
 // ---------------------------------------------------------------- рецепты
-struct Recipe { int w, h; u16 cell[9]; u16 out; u8 cnt; };
+struct Recipe { int w, h; u16 cell[9]; u16 out; u8 cnt; u16 ench; };
+static u16 g_matchEnch = 0;   // зачарование результата последнего совпавшего рецепта
 static std::vector<Recipe> g_recipes;
-static void addRecipe(std::initializer_list<const char*> rows, std::initializer_list<std::pair<char, int>> keys, int out, int cnt) {
+static void addRecipe(std::initializer_list<const char*> rows, std::initializer_list<std::pair<char, int>> keys, int out, int cnt, u16 ench = 0) {
     Recipe r; r.h = (int)rows.size(); r.w = 0; memset(r.cell, 0, sizeof(r.cell));
     int y = 0;
     for (const char* row : rows) {
@@ -2945,7 +4307,7 @@ static void addRecipe(std::initializer_list<const char*> rows, std::initializer_
         }
         y++;
     }
-    r.out = (u16)out; r.cnt = (u8)cnt;
+    r.out = (u16)out; r.cnt = (u8)cnt; r.ench = ench;
     g_recipes.push_back(r);
 }
 static void initRecipes() {
@@ -2968,7 +4330,19 @@ static void initRecipes() {
     addRecipe({"FFF", "PPP"}, {{'F', I_FLUFF}, {'P', B_PLANKS}}, B_BED, 1);
     addRecipe({"NNN", "PPP"}, {{'N', I_STRING}, {'P', B_PLANKS}}, B_BED, 1);
     addRecipe({".SN", "S.N", ".SN"}, {{'S', I_STICK}, {'N', I_STRING}}, I_BOW, 1);
+    addRecipe({"..S", ".SN", "S.N"}, {{'S', I_STICK}, {'N', I_STRING}}, I_ROD, 1);
     addRecipe({"B", "S", "F"}, {{'B', I_BONE}, {'S', I_STICK}, {'F', I_FLUFF}}, I_ARROW, 4);
+    // книги и зачарования
+    // зачарованные книги не создаются — их можно только выловить удочкой (шанс 2%)
+    addRecipe({"BBB", ".I.", "III"}, {{'B', B_IRON_BLOCK}, {'I', I_IRON}}, B_ANVIL, 1);
+    // броня
+    const int armMats[3] = {I_IRON, I_GOLD, I_DIAMOND};
+    for (int m = 0; m < 3; m++) {
+        addRecipe({"MMM", "M.M"}, {{'M', armMats[m]}}, armorId(m, 0), 1);
+        addRecipe({"M.M", "MMM", "MMM"}, {{'M', armMats[m]}}, armorId(m, 1), 1);
+        addRecipe({"MMM", "M.M", "M.M"}, {{'M', armMats[m]}}, armorId(m, 2), 1);
+        addRecipe({"M.M", "M.M"}, {{'M', armMats[m]}}, armorId(m, 3), 1);
+    }
     addRecipe({"SS", "SS"}, {{'S', B_SAND}}, B_SANDSTONE, 1);
     addRecipe({"SS", "SS"}, {{'S', B_STONE}}, B_STONEBRICK, 4);
     addRecipe({"III", "III", "III"}, {{'I', I_IRON}}, B_IRON_BLOCK, 1);
@@ -2997,7 +4371,7 @@ static int matchRecipe(const Stack* grid, int gw, int* outCnt) {
                 int gid = g.empty() ? 0 : g.id;
                 if (gid != r.cell[y * 3 + rx]) ok = false;
             }
-            if (ok) { *outCnt = r.cnt; return r.out; }
+            if (ok) { *outCnt = r.cnt; g_matchEnch = r.ench; return r.out; }
         }
     }
     return 0;
@@ -3010,6 +4384,7 @@ static int smeltResult(int id) {
         case I_RAWMEAT: return I_COOKED; case B_LOG: case B_PINE_LOG: return I_COAL; case B_COAL_ORE: return I_COAL;
         case B_DIAMOND_ORE: return I_DIAMOND;
     }
+    if (isFishRaw(id)) return I_FFRY0 + (id - I_FISH0);
     return 0;
 }
 static float fuelTime(int id) {
@@ -3154,9 +4529,29 @@ static void spawnDrop(Stack s, double x, double y, double z, float vx = 1e9f, fl
 }
 
 // ---------------------------------------------------------------- урон игроку
-static void playerHurt(float amount, double fromX = 1e9, double fromZ = 0, bool ignoreCd = false) {
+static int armorPoints() { int p = 0; for (int i = 0; i < 4; i++) if (!P.armor[i].empty()) p += ARMOR_PTS[armorMat(P.armor[i].id)][armorPiece(P.armor[i].id)]; return p; }
+static int protectionLevels() { int p = 0; for (int i = 0; i < 4; i++) p += enchLvl(P.armor[i], EN_PROT); return p; }
+// armorMode: 2 — броня и защита (удары, стрелы, лава), 1 — только зачарование «Защита» (падение), 0 — ничего (голод, утопление)
+static void playerHurt(float amount, double fromX = 1e9, double fromZ = 0, bool ignoreCd = false, int armorMode = 2) {
     if (P.dead || g_mode == GM_CREATIVE) return;
     if (P.hurtCd > 0 && !ignoreCd) return;
+    {
+        float red = 0;
+        int pts = armorPoints();
+        if (armorMode >= 2) red += pts * 0.04f;
+        if (armorMode >= 1) red += protectionLevels() * 0.04f;
+        red = std::min(red, 0.8f);
+        float raw = amount;
+        amount *= 1.f - red;
+        if (armorMode >= 2 && pts > 0) {   // броня изнашивается
+            int wear = std::max(1, (int)(raw / 4.f));
+            for (int i = 0; i < 4; i++) {
+                Stack& a = P.armor[i]; if (a.empty()) continue;
+                a.dmg += wear;
+                if (a.dmg >= maxDur(a.id)) { showMsg("СЛОМАНО: " + itemName(a.id)); a.clear(); playSound(SND_BREAK0 + SM_GLASS, 0.6f, 0.7f); }
+            }
+        }
+    }
     P.health -= amount; P.hurtCd = 0.5f; P.hurtFlash = 0.35f;
     playSound(SND_HURT, 0.8f, 0.9f + (SDL_GetTicks() % 20) / 100.f);
     if (fromX < 1e8) {
@@ -3166,25 +4561,28 @@ static void playerHurt(float amount, double fromX = 1e9, double fromZ = 0, bool 
     if (P.health <= 0) {
         P.health = 0; P.dead = true;
         for (int i = 0; i < 36; i++) if (!P.inv[i].empty()) { spawnDrop(P.inv[i], P.x, P.y + 1, P.z); P.inv[i].clear(); }
+        for (int i = 0; i < 4; i++) if (!P.armor[i].empty()) { spawnDrop(P.armor[i], P.x, P.y + 1, P.z); P.armor[i].clear(); }
     }
 }
 
 // ---------------------------------------------------------------- мобы
-enum MobType { MOB_TOPTUN = 0, MOB_PUKH, MOB_GNIL, MOB_TEN, MOB_ZOMBIE, MOB_SKELETON, MOB_SPIDER, MOB_COUNT };
+enum MobType { MOB_TOPTUN = 0, MOB_PUKH, MOB_GNIL, MOB_TEN, MOB_ZOMBIE, MOB_SKELETON, MOB_SPIDER, MOB_FISH, MOB_COUNT };
 struct MobDef { const char* name; float hp, hw, h, speed; bool hostile; float dmg; int snd; bool burns; };
 static const MobDef MD[MOB_COUNT] = {
-    {"ТОПТУН", 10, 0.45f, 1.3f, 1.6f, false, 0, SND_TOPTUN, false},
-    {"ПУХЛЯК", 4, 0.3f, 0.75f, 2.0f, false, 0, SND_PUKH, false},
+    {"ЯК", 10, 0.48f, 1.4f, 1.5f, false, 0, SND_TOPTUN, false},
+    {"УТКА", 4, 0.24f, 0.7f, 1.9f, false, 0, SND_PUKH, false},
     {"ГНИЛЬ", 20, 0.42f, 1.45f, 2.2f, true, 3, SND_GNIL, true},
     {"ТЕНЕВИК", 14, 0.35f, 1.1f, 4.0f, true, 3, SND_TEN, true},
     {"ЗОМБИ", 20, 0.3f, 1.9f, 2.3f, true, 3, SND_ZOMB, true},       // медленный, бьёт в ближнем бою
     {"СКЕЛЕТ", 16, 0.3f, 1.95f, 2.6f, true, 0, SND_SKEL, true},     // держит дистанцию и стреляет из лука
     {"ПАУК", 14, 0.65f, 0.85f, 3.6f, true, 2, SND_SPID, false},     // быстрый, прыгает, лазает по стенам; днём мирный
+    {"РЫБА", 3, 0.24f, 0.3f, 1.3f, false, 0, SND_FLOP, false},       // плавает в реках и озёрах; вид — в var
 };
 struct Mob {
     int type; double x, y, z; float vx = 0, vy = 0, vz = 0; float yaw = 0, wishYaw = 0; float hp; float hurtT = 0;
     float walk = 0; float aiT = 0; bool moving = false; bool onGround = false; float atkCd = 0; float sndT = 5; float burnT = 0; float fleeT = 0;
     float angryT = 0, leapCd = 0, strafeT = 0;
+    int var = 0; float pitch = 0, phase = 0, outT = 0, swim = 0; double tx = 0, ty = 0, tz = 0; bool bait = false;   // рыба
     bool dead = false;
 };
 static std::vector<Mob> g_mobs;
@@ -3214,12 +4612,14 @@ static void mobDie(Mob& m) {
         case MOB_ZOMBIE: { int n = r.range(0, 2); if (n) spawnDrop(mkStack(I_ROTTEN, n), m.x, m.y + 0.5, m.z); if (r.range(100) < 4) spawnDrop(mkStack(I_IRON, 1), m.x, m.y + 0.5, m.z); } break;
         case MOB_SKELETON: { int n = r.range(0, 2); if (n) spawnDrop(mkStack(I_BONE, n), m.x, m.y + 0.5, m.z); int a = r.range(0, 2); if (a) spawnDrop(mkStack(I_ARROW, a), m.x, m.y + 0.5, m.z); } break;
         case MOB_SPIDER: { int n = r.range(0, 2); if (n) spawnDrop(mkStack(I_STRING, n), m.x, m.y + 0.5, m.z); } break;
+        case MOB_FISH: spawnDrop(mkStack(I_FISH0 + m.var, 1), m.x, m.y + 0.3, m.z); break;
     }
 }
 static void mobHurt(Mob& m, float dmg, double fromX, double fromZ) {
     m.hp -= dmg; m.hurtT = 0.4f;
     float dx = (float)(m.x - fromX), dz = (float)(m.z - fromZ), l = sqrtf(dx * dx + dz * dz) + 0.001f;
     m.vx = dx / l * 7.f; m.vz = dz / l * 7.f; m.vy = 5.5f;
+    if (m.type == MOB_FISH) { m.vx *= 0.45f; m.vz *= 0.45f; m.vy = 1.f; m.bait = false; }
     playSound(SND_HIT, 0.8f);
     playSound(MD[m.type].snd, 0.5f, 1.15f);
     if (!MD[m.type].hostile) m.fleeT = 4.f;
@@ -3227,7 +4627,9 @@ static void mobHurt(Mob& m, float dmg, double fromX, double fromZ) {
     if (m.hp <= 0) mobDie(m);
 }
 
+static void updateFish(Mob& m, float dt, Rng& r);
 static void updateMob(Mob& m, float dt, Rng& r) {
+    if (m.type == MOB_FISH) { updateFish(m, dt, r); return; }
     const MobDef& d = MD[m.type];
     m.hurtT = std::max(0.f, m.hurtT - dt);
     m.atkCd = std::max(0.f, m.atkCd - dt);
@@ -3342,7 +4744,7 @@ static bool spawnSpaceOK(int x, int y, int z, int t) {
 }
 static void spawnMobs(Rng& r) {
     int peaceful = 0, hostile = 0;
-    for (const Mob& m : g_mobs) { if (MD[m.type].hostile) hostile++; else peaceful++; }
+    for (const Mob& m : g_mobs) { if (m.type == MOB_FISH) continue; if (MD[m.type].hostile) hostile++; else peaceful++; }
     for (int attempt = 0; attempt < 6; attempt++) {
         float ang = r.f() * 6.2831853f, dist = 18.f + r.f() * 26.f;
         int x = ifloor(P.x + sinf(ang) * dist), z = ifloor(P.z + cosf(ang) * dist);
@@ -3357,7 +4759,9 @@ static void spawnMobs(Rng& r) {
             // на поверхности
             if (getBlock(x, top + 1, z) != B_AIR || getBlock(x, top + 2, z) != B_AIR) continue;
             if (!night && peaceful < 10 && (ground == B_GRASS || ground == B_SNOWGRASS)) {
-                int t = r.range(100) < 55 ? MOB_TOPTUN : MOB_PUKH;
+                bool nearWater = false;
+                for (int k = 0; k < 6 && !nearWater; k++) if (getBlock(x + r.range(-6, 6), top, z + r.range(-6, 6)) == B_WATER) nearWater = true;
+                int t = r.range(100) < (nearWater ? 25 : 55) ? MOB_TOPTUN : MOB_PUKH;
                 int n = r.range(1, 3);
                 for (int i = 0; i < n && peaceful < 10; i++) {
                     Mob m; m.type = t; m.x = x + 0.5 + r.sf(); m.y = top + 1.05; m.z = z + 0.5 + r.sf(); m.hp = MD[t].hp; m.yaw = r.f() * 6.28f; m.wishYaw = m.yaw;
@@ -3489,7 +4893,7 @@ static float breakTime(u8 b, const Stack& tool, bool* canHarvest) {
     int tk = isTool(tool.id) ? toolKind(tool.id) : -1;
     int tm = isTool(tool.id) ? toolMat(tool.id) : -1;
     float speed = 1.f;
-    if (tk >= 0 && tk == d.tool) speed = MAT_SPEED[tm];
+    if (tk >= 0 && tk == d.tool) { speed = MAT_SPEED[tm]; int ef = enchLvl(tool, EN_EFF); if (ef) speed += ef * ef + 1; }   // «Эффективность»
     if (tk == TK_SWORD && (b == B_LEAVES || b == B_PINE_LEAVES || b == B_CACTUS)) speed = 1.5f;
     if (d.needPick) {
         bool ok = tk == TK_PICK && MAT_TIER[tm] >= d.tier;
@@ -3515,9 +4919,9 @@ static Stack dropFor(u8 b, Rng& r) {
     }
 }
 static void damageTool(Stack& s, int amount = 1) {
-    if (!isTool(s.id) || g_mode == GM_CREATIVE) return;
+    if (!(isTool(s.id) || s.id == I_ROD) || g_mode == GM_CREATIVE) return;
     s.dmg += amount;
-    if (s.dmg >= MAT_DUR[toolMat(s.id)]) { s.clear(); playSound(SND_BREAK0 + SM_GLASS, 0.6f, 0.6f); showMsg("ИНСТРУМЕНТ СЛОМАЛСЯ"); }
+    if (s.dmg >= maxDur(s.id)) { s.clear(); playSound(SND_BREAK0 + SM_GLASS, 0.6f, 0.6f); showMsg("ИНСТРУМЕНТ СЛОМАЛСЯ"); }
 }
 
 static void breakBlockAt(int x, int y, int z, bool harvest) {
@@ -3527,7 +4931,12 @@ static void breakBlockAt(int x, int y, int z, bool harvest) {
     spawnBreakParticles(x, y, z, BD[b].shape == SH_CUBE ? BD[b].tex[0] : BD[b].tex[0]);
     Rng r(SDL_GetTicks() ^ (u32)(x * 31 + z * 17 + y));
     bool surv = g_mode == GM_SURVIVAL;
-    if (surv && harvest) { Stack s = dropFor(b, r); if (!s.empty()) spawnDrop(s, x + 0.5, y + 0.4, z + 0.5); }
+    if (surv && harvest) {
+        Stack s = dropFor(b, r);
+        int luck = enchLvl(P.inv[P.sel], EN_LUCK);   // «Удача»: из руд выпадает больше
+        if (luck && !s.empty() && (b == B_COAL_ORE || b == B_IRON_ORE || b == B_GOLD_ORE || b == B_DIAMOND_ORE)) s.cnt += r.range(0, luck);
+        if (!s.empty()) spawnDrop(s, x + 0.5, y + 0.4, z + 0.5);
+    }
     i64 k = posKey(x, y, z);
     if (b == B_CHEST) {
         auto it = g_chests.find(k);
@@ -3729,6 +5138,9 @@ static bool anyMobIntersects(int x, int y, int z) {
 static void openCraftingTable();
 static void openFurnace(int x, int y, int z);
 static void openChest(int x, int y, int z);
+static void openAnvil();
+static int g_contX = 0, g_contY = 0, g_contZ = 0;
+
 static void sleepInBed(int x, int y, int z);
 
 static void respawnPlayer() {
@@ -3806,7 +5218,7 @@ static void updatePlayerPhysics(float dt) {
     }
     if (P.onGround && P.falling) {
         float h = P.fallStartY - (float)P.y;
-        if (h > 3.4f) { playerHurt(floorf(h - 3.f), 1e9, 0, true); playSound(SND_HIT, 0.7f, 0.7f); }
+        if (h > 3.4f) { playerHurt(floorf(h - 3.f), 1e9, 0, true, 1); playSound(SND_HIT, 0.7f, 0.7f); }
         P.falling = false;
     }
     if (P.inWater || P.onLadder) P.falling = false;
@@ -3836,15 +5248,15 @@ static void updateSurvival(float dt) {
     } else P.regenT = 0;
     if (P.hunger <= 0) {
         P.starveT += dt;
-        if (P.starveT >= 4.f) { P.starveT = 0; if (P.health > 1) playerHurt(1, 1e9, 0, true); }
+        if (P.starveT >= 4.f) { P.starveT = 0; if (P.health > 1) playerHurt(1, 1e9, 0, true, 0); }
     }
     if (P.headInWater) {
         P.air -= dt;
-        if (P.air < 0) { P.air = 0; P.drownT += dt; if (P.drownT > 1.f) { P.drownT = 0; playerHurt(2, 1e9, 0, true); } }
+        if (P.air < 0) { P.air = 0; P.drownT += dt; if (P.drownT > 1.f) { P.drownT = 0; playerHurt(2, 1e9, 0, true, 0); } }
     } else { P.air = std::min(10.f, P.air + dt * 4.f); P.drownT = 0; }
     if (P.inLava) playerHurt(4);
     if (boxTouchesBlock(P.x, P.y, P.z, PL_HW, PL_H, B_CACTUS, 0.04f)) { P.cactusT += dt; if (P.cactusT > 0.5f) { P.cactusT = 0; playerHurt(1); } }
-    if (P.y < -16) playerHurt(4, 1e9, 0, true);
+    if (P.y < -16) playerHurt(4, 1e9, 0, true, 0);
 }
 
 static bool eatHeld() {
@@ -3921,6 +5333,7 @@ static bool tryPlace(const Hit& h) {
             return true;
         }
         case B_FURNACE: case B_CHEST: meta = (u8)((pf + 2) & 3); break;
+        case B_ANVIL: meta = (u8)((pf + 1) & 1); break;
         case B_SAPLING: case B_FLOWER_R: case B_FLOWER_Y: case B_TALLGRASS: {
             u8 g = getBlock(tx, ty - 1, tz); if (g != B_GRASS && g != B_DIRT && g != B_SNOWGRASS) return false; break;
         }
@@ -3956,8 +5369,266 @@ static bool tryInteract(const Hit& h) {
             return true;
         }
         case B_BED: sleepInBed(h.x, h.y, h.z); return true;
+        case B_ANVIL: g_contX = h.x; g_contY = h.y; g_contZ = h.z; openAnvil(); return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------- рыбы: появление и плавание
+static inline bool isWaterAt(double x, double y, double z) { return getBlock(ifloor(x), ifloor(y), ifloor(z)) == B_WATER; }
+static const float FISH_SPEED[4] = {1.3f, 0.9f, 1.8f, 1.2f};
+static int fishCount() { int n = 0; for (const Mob& m : g_mobs) if (m.type == MOB_FISH && !m.dead) n++; return n; }
+static int pickFishSpecies(Rng& r, int depth, int luck) {
+    int w[4] = {40, 30, 22, 8};
+    if (depth >= 5) { w[0] = 32; w[1] = 22; w[2] = 22; w[3] = 24; }   // в глубокой воде чаще щука
+    w[2] += luck * 3; w[3] += luck * 4;
+    int sum = w[0] + w[1] + w[2] + w[3], v = r.range(sum);
+    for (int i = 0; i < 4; i++) { if (v < w[i]) return i; v -= w[i]; }
+    return 0;
+}
+static void spawnFish(Rng& r) {
+    int have = fishCount();
+    for (int attempt = 0; attempt < 4 && have < 14; attempt++) {
+        float ang = r.f() * 6.2831853f, dist = 8.f + r.f() * 30.f;
+        int x = ifloor(P.x + sinf(ang) * dist), z = ifloor(P.z + cosf(ang) * dist);
+        Chunk* c = getChunk(x >> 4, z >> 4);
+        if (!c || !c->meshed) continue;
+        int top = WH - 2;
+        while (top > 1 && getBlock(x, top, z) == B_AIR) top--;
+        if (getBlock(x, top, z) != B_WATER) continue;
+        int depth = 0; while (depth < 24 && getBlock(x, top - depth, z) == B_WATER) depth++;
+        if (depth < 2) continue;
+        int sp = pickFishSpecies(r, depth, 0);
+        int n = sp == 3 ? 1 : r.range(2, 4);   // стайкой, щука — одна
+        double y = top - std::min(depth - 1, 1 + r.range(0, std::max(0, depth - 2))) + 0.35;
+        for (int i = 0; i < n && have < 14; i++) {
+            Mob m; m.type = MOB_FISH; m.var = sp; m.hp = MD[MOB_FISH].hp + (sp == 3 ? 3 : 0);
+            m.x = x + 0.5 + r.sf() * 0.8; m.y = y - 0.15 + r.sf() * 0.3; m.z = z + 0.5 + r.sf() * 0.8;
+            if (!isWaterAt(m.x, m.y + 0.15, m.z)) continue;
+            m.yaw = r.f() * 6.28f; m.phase = r.f() * 6.28f; m.tx = m.x; m.ty = m.y; m.tz = m.z; m.aiT = r.f() * 2.f;
+            g_mobs.push_back(m); have++;
+        }
+    }
+}
+struct Bobber {
+    bool active = false; int state = 0;   // 0 летит, 1 ждёт, 2 рыба подплывает, 3 клюёт, 4 лежит на земле
+    double x = 0, y = 0, z = 0; float vx = 0, vy = 0, vz = 0;
+    float t = 0, waitT = 0, stateT = 0, nibT = 0, dip = 0; int fishMob = -1; int species = 0;
+    float trailAng = 0;
+};
+static Bobber g_bob;
+static float g_rodTipCam[3] = {0.3f, -0.1f, 1.2f}; static bool g_rodTipOK = false;
+static int g_lureLuck = 0;
+static void updateFish(Mob& m, float dt, Rng& r) {
+    m.hurtT = std::max(0.f, m.hurtT - dt);
+    m.fleeT = std::max(0.f, m.fleeT - dt);
+    double cy = m.y + 0.15;
+    bool inW = isWaterAt(m.x, cy, m.z);
+    float spdBase = FISH_SPEED[m.var];
+    if (inW) {
+        m.outT = 0;
+        float pdx = (float)(m.x - P.x), pdy = (float)(cy - (P.y + 0.9)), pdz = (float)(m.z - P.z);
+        float pd = sqrtf(pdx * pdx + pdy * pdy + pdz * pdz);
+        float want = 0.f;
+        if (!P.dead && pd < 2.8f && (fabsf(P.vx) + fabsf(P.vz) > 0.5f || pd < 1.6f)) m.fleeT = std::max(m.fleeT, 1.5f);   // пугается подошедшего игрока
+        if (m.fleeT > 0) {
+            m.bait = false;
+            float l = std::max(0.2f, pd);
+            m.tx = m.x + pdx / l * 4.0 + r.sf() * 0.5; m.ty = cy + pdy / l * 1.0; m.tz = m.z + pdz / l * 4.0;
+            want = spdBase * 2.6f; m.aiT = 0.3f;
+        } else if (m.bait && g_bob.active && (g_bob.state == 1 || g_bob.state == 2)) {   // идёт на наживку
+            m.tx = g_bob.x; m.ty = g_bob.y - 0.25; m.tz = g_bob.z;
+            want = spdBase * 0.7f;
+        } else {
+            m.bait = false;
+            m.aiT -= dt;
+            double ddx = m.tx - m.x, ddy = m.ty - cy, ddz = m.tz - m.z;
+            if (m.aiT <= 0 || ddx * ddx + ddy * ddy + ddz * ddz < 0.25) {
+                m.aiT = 2.5f + r.f() * 5.f;
+                for (int k = 0; k < 8; k++) {
+                    double nx = m.x + r.sf() * 5.0, ny = cy + r.sf() * 1.2, nz = m.z + r.sf() * 5.0;
+                    if (isWaterAt(nx, ny, nz) && isWaterAt(nx, ny + 0.35, nz)) { m.tx = nx; m.ty = ny; m.tz = nz; break; }
+                }
+                m.swim = r.range(100) < 25 ? 0.25f : 1.f;   // иногда просто стоит на месте, шевеля плавниками
+            }
+            want = spdBase * m.swim;
+        }
+        double ddx = m.tx - m.x, ddy = m.ty - cy, ddz = m.tz - m.z;
+        float dl = (float)sqrt(ddx * ddx + ddy * ddy + ddz * ddz) + 1e-4f;
+        if (dl < 0.3f) want *= dl / 0.3f;
+        float wx = (float)ddx / dl * want, wy = (float)ddy / dl * want * 0.6f, wz = (float)ddz / dl * want;
+        float k = std::min(1.f, dt * (m.fleeT > 0 ? 5.f : 1.8f));
+        m.vx += (wx - m.vx) * k; m.vy += (wy - m.vy) * k; m.vz += (wz - m.vz) * k;
+        // остаться в воде: впереди не вода — разворот
+        double nx = m.x + m.vx * dt * 3.f, ny = cy + m.vy * dt * 3.f, nz = m.z + m.vz * dt * 3.f;
+        if (!isWaterAt(nx, ny, nz) || !isWaterAt(nx, ny + 0.3, nz)) {
+            if (!isWaterAt(m.x, cy + 0.3, m.z)) m.vy = -0.4f;   // у самой поверхности — вниз
+            if (!isWaterAt(nx, cy, nz)) { m.vx *= -0.3f; m.vz *= -0.3f; }
+            m.aiT = 0; m.tx = m.x - m.vx; m.tz = m.z - m.vz; m.ty = cy - 0.2;
+        }
+        double ox = m.x, oy = m.y, oz = m.z;
+        m.x += m.vx * dt; m.y += m.vy * dt; m.z += m.vz * dt;
+        if (BD[getBlock(ifloor(m.x), ifloor(m.y + 0.15), ifloor(m.z))].solid) { m.x = ox; m.y = oy; m.z = oz; m.vx = m.vy = m.vz = 0; m.aiT = 0; }
+        float hs = sqrtf(m.vx * m.vx + m.vz * m.vz);
+        if (hs > 0.05f) {
+            float wy2 = atan2f(m.vx, m.vz), dy = wy2 - m.yaw;
+            while (dy > (float)M_PI) dy -= 2 * (float)M_PI; while (dy < -(float)M_PI) dy += 2 * (float)M_PI;
+            m.yaw += dy * std::min(1.f, dt * 5.f);
+        }
+        float wp = clampf(atan2f(m.vy, std::max(hs, 0.2f)), -0.6f, 0.6f);
+        m.pitch += (wp - m.pitch) * std::min(1.f, dt * 4.f);
+        float sp = sqrtf(hs * hs + m.vy * m.vy);
+        m.phase += dt * (3.f + sp * 7.f);
+        m.walk = sp;   // для анимации: сила взмахов хвоста
+        if (r.range(1000) < 4) spawnPuff((float)m.x, (float)cy + 0.1f, (float)m.z, 1, 0.75f, 0.85f, 1.f, true, 0.8f);   // пузырёк
+    } else {
+        // на суше: бьётся и подпрыгивает, долго не выживет
+        m.vy -= 28.f * dt;
+        int res = moveBody(m.x, m.y, m.z, m.vx, m.vy, m.vz, 0.2f, 0.25f, dt);
+        bool ground = (res & 2) != 0;
+        if (ground) {
+            m.vx *= expf(-dt * 8.f); m.vz *= expf(-dt * 8.f);
+            m.aiT -= dt;
+            if (m.aiT <= 0) {
+                m.aiT = 0.5f + r.f() * 0.7f; m.vy = 3.5f + r.f() * 1.5f; m.vx = r.sf() * 1.6f; m.vz = r.sf() * 1.6f; m.yaw += r.sf() * 2.f;
+                float d2 = (float)((m.x - P.x) * (m.x - P.x) + (m.z - P.z) * (m.z - P.z));
+                if (d2 < 400) playSound(SND_FLOP, 0.5f * (1.f - d2 / 400.f), 0.9f + r.f() * 0.3f);
+            }
+        }
+        m.pitch = 0; m.phase += dt * 14.f; m.walk = 2.5f;
+        m.outT += dt;
+        if (m.outT > 2.f) { m.outT = 0; m.hp -= 1; m.hurtT = 0.2f; if (m.hp <= 0) mobDie(m); }
+    }
+    if (m.y < -20) m.dead = true;
+}
+
+// ---------------------------------------------------------------- рыбалка
+static void rodCancel() { g_bob.active = false; if (g_bob.fishMob >= 0 && g_bob.fishMob < (int)g_mobs.size()) g_mobs[g_bob.fishMob].bait = false; g_bob.fishMob = -1; }
+static void rodCast() {
+    const float* f = g_cam.f;
+    g_bob = Bobber(); g_bob.active = true; g_bob.state = 0;
+    g_lureLuck = enchLvl(P.inv[P.sel], EN_LUCK);
+    g_bob.x = P.x + f[0] * 0.6; g_bob.y = P.y + PL_EYE - 0.1 + f[1] * 0.6; g_bob.z = P.z + f[2] * 0.6;
+    float sp = 11.f;
+    g_bob.vx = f[0] * sp + (float)P.vx * 0.5f; g_bob.vy = f[1] * sp + 3.f; g_bob.vz = f[2] * sp + (float)P.vz * 0.5f;
+    playSound(SND_CAST, 0.7f, 0.95f + (SDL_GetTicks() % 10) / 100.f);
+    P.swing = 1.f;
+}
+static float fishWait(int luck) { Rng r(SDL_GetTicks() * 7 + 3); return (5.f + r.f() * 17.f) * (1.f - 0.13f * luck); }
+static void rodReel(Stack& rod) {
+    int luck = enchLvl(rod, EN_LUCK);
+    P.swing = 1.f;
+    playSound(SND_REEL, 0.6f, 1.f);
+    if (g_bob.state == 3) {
+        Rng r(SDL_GetTicks() * 13 + 5);
+        double dx = P.x - g_bob.x, dy = P.y + 1.2 - g_bob.y, dz = P.z - g_bob.z;
+        float T = 0.75f;
+        if (r.range(1000) < 20) {   // 2%: со дна вытащена зачарованная книга (любое зачарование, низкие уровни чаще)
+            int e = r.range(EN_COUNT), mx = EN_MAX[e], sum = mx * (mx + 1) / 2, v = r.range(sum), lvl = 1;
+            for (int l = 1; l <= mx; l++) { int w = mx + 1 - l; if (v < w) { lvl = l; break; } v -= w; }
+            Stack book = mkStack(I_EBOOK, 1); setEnch(book, e, lvl);
+            spawnDrop(book, g_bob.x, g_bob.y + 0.2, g_bob.z, (float)dx / T, (float)dy / T + 0.5f * 20.f * T, (float)dz / T);
+            spawnPuff((float)g_bob.x, (float)g_bob.y + 0.3f, (float)g_bob.z, 16, 0.75f, 0.45f, 1.f, true, 2.5f);
+            playSound(SND_SPLASH, 0.7f, 1.1f); playSound(SND_ENCH, 0.7f);
+            showMsg("ВЫЛОВЛЕНО: " + stackName(book) + "!", 3.f);
+            if (g_bob.fishMob >= 0 && g_bob.fishMob < (int)g_mobs.size()) { g_mobs[g_bob.fishMob].bait = false; g_mobs[g_bob.fishMob].fleeT = 3.f; }
+            P.exhaustion += 0.1f;
+            damageTool(rod, 1);
+            rodCancel();
+            return;
+        }
+        int sp = g_bob.species;
+        if (g_bob.fishMob >= 0 && g_bob.fishMob < (int)g_mobs.size()) { Mob& m = g_mobs[g_bob.fishMob]; if (m.type == MOB_FISH && !m.dead) { sp = m.var; m.dead = true; } }
+        int cnt = 1 + ((r.range(100) < luck * 12) ? 1 : 0);
+        Stack fish = mkStack(I_FISH0 + sp, cnt);
+        // рыба вылетает из воды прямо к игроку
+        spawnDrop(fish, g_bob.x, g_bob.y + 0.2, g_bob.z, (float)dx / T, (float)dy / T + 0.5f * 20.f * T, (float)dz / T);
+        spawnPuff((float)g_bob.x, (float)g_bob.y, (float)g_bob.z, 14, 0.8f, 0.9f, 1.f, false, 3.5f);
+        playSound(SND_SPLASH, 0.7f, 1.1f);
+        showMsg(std::string("ПОЙМАН: ") + FISH_SPECIES[sp] + (cnt > 1 ? " x2" : ""), 1.8f);
+        P.exhaustion += 0.1f;
+        damageTool(rod, 1);
+    } else if (g_bob.state == 4) damageTool(rod, 2);   // зацепился за землю
+    rodCancel();
+}
+static void updateBobber(float dt) {
+    if (!g_bob.active) return;
+    const Stack& held = P.inv[P.sel];
+    double ddx = g_bob.x - P.x, ddz = g_bob.z - P.z, ddy = g_bob.y - P.y;
+    if (P.dead || held.id != I_ROD || ddx * ddx + ddy * ddy + ddz * ddz > 40.0 * 40.0) { rodCancel(); return; }
+    Bobber& b = g_bob;
+    b.t += dt; b.stateT += dt;
+    Rng r(SDL_GetTicks() * 3 + (u32)(b.t * 1000));
+    if (b.state == 0) {
+        const int N = 4; float h = dt / N;
+        for (int i = 0; i < N && b.state == 0; i++) {
+            b.vy -= 16.f * h; float dr = expf(-0.4f * h); b.vx *= dr; b.vz *= dr;
+            double nx = b.x + b.vx * h, ny = b.y + b.vy * h, nz = b.z + b.vz * h;
+            u8 bl = getBlock(ifloor(nx), ifloor(ny), ifloor(nz));
+            if (bl == B_WATER) {
+                b.x = nx; b.y = ny; b.z = nz; b.state = 1; b.stateT = 0; b.vy *= 0.2f; b.vx *= 0.2f; b.vz *= 0.2f;
+                b.waitT = fishWait(g_lureLuck); b.nibT = 1.f + r.f() * 3.f;
+                spawnPuff((float)b.x, (float)b.y, (float)b.z, 8, 0.85f, 0.92f, 1.f, false, 2.5f);
+                playSound(SND_SPLASH, 0.45f, 1.3f);
+            } else if (bl == B_LAVA) { spawnPuff((float)nx, (float)ny, (float)nz, 6, 1.f, 0.5f, 0.1f, true); playSound(SND_FIZZ, 0.5f); rodCancel(); return; }
+            else if (BD[bl].solid) { b.state = 4; b.vx = b.vy = b.vz = 0; playSound(SND_PLACE, 0.3f, 1.6f); }
+            else { b.x = nx; b.y = ny; b.z = nz; }
+        }
+        if (b.y < -10) rodCancel();
+        return;
+    }
+    if (b.state == 4) { if (!BD[getBlock(ifloor(b.x), ifloor(b.y - 0.05), ifloor(b.z))].solid && !BD[getBlock(ifloor(b.x), ifloor(b.y), ifloor(b.z))].solid) { b.state = 0; } return; }
+    // в воде: держится на поверхности
+    int bx = ifloor(b.x), bz = ifloor(b.z), by = ifloor(b.y);
+    if (getBlock(bx, by, bz) != B_WATER && getBlock(bx, by - 1, bz) != B_WATER) { b.state = 0; return; }
+    if (getBlock(bx, by, bz) != B_WATER) by--;
+    while (by < WH - 1 && getBlock(bx, by + 1, bz) == B_WATER) by++;
+    float surf = by + 0.86f;
+    b.dip += ((b.state == 3 ? -0.28f : 0.f) - b.dip) * std::min(1.f, dt * (b.state == 3 ? 14.f : 6.f));
+    float target = surf - 0.03f + sinf(b.t * 2.1f) * 0.015f + b.dip;
+    b.vy += ((target - (float)b.y) * 30.f - b.vy * 6.f) * dt;
+    b.vx *= expf(-2.f * dt); b.vz *= expf(-2.f * dt);
+    b.x += b.vx * dt; b.y += b.vy * dt; b.z += b.vz * dt;
+    if (b.state == 1) {
+        // живая рыба рядом замечает наживку
+        if (b.fishMob < 0) {
+            float best = 7.f * 7.f;
+            for (size_t i = 0; i < g_mobs.size(); i++) {
+                Mob& m = g_mobs[i]; if (m.type != MOB_FISH || m.dead || m.fleeT > 0) continue;
+                float d2 = (float)((m.x - b.x) * (m.x - b.x) + (m.y + 0.15 - b.y) * (m.y + 0.15 - b.y) + (m.z - b.z) * (m.z - b.z));
+                if (d2 < best) { best = d2; b.fishMob = (int)i; }
+            }
+            if (b.fishMob >= 0 && b.stateT > 1.5f && r.range(100) < 50) g_mobs[b.fishMob].bait = true; else b.fishMob = -1;
+        }
+        if (b.fishMob >= 0) {
+            Mob& m = g_mobs[b.fishMob];
+            if (m.type != MOB_FISH || m.dead || !m.bait) b.fishMob = -1;
+            else {
+                float d2 = (float)((m.x - b.x) * (m.x - b.x) + (m.z - b.z) * (m.z - b.z));
+                if (d2 < 0.5f * 0.5f) { b.state = 3; b.stateT = 0; b.species = m.var; }
+            }
+        }
+        // мелкие подёргивания поплавка — «пробует»
+        b.nibT -= dt;
+        if (b.nibT <= 0) { b.nibT = 1.5f + r.f() * 4.f; b.vy -= 0.6f; spawnPuff((float)b.x, (float)surf, (float)b.z, 2, 0.85f, 0.92f, 1.f, false, 0.8f); }
+        b.waitT -= dt;
+        if (b.waitT <= 0 && b.fishMob < 0) { b.state = 2; b.stateT = 0; b.trailAng = r.f() * 6.2831853f; b.species = pickFishSpecies(r, 3, g_lureLuck); }
+    } else if (b.state == 2) {
+        // невидимая рыба подплывает: дорожка пузырьков к поплавку
+        float k = 1.f - std::min(1.f, b.stateT / 2.f), d = 2.5f * k + 0.2f;
+        float px = (float)b.x + sinf(b.trailAng) * d, pz = (float)b.z + cosf(b.trailAng) * d;
+        if (r.range(100) < 60) spawnPuff(px, surf - 0.25f, pz, 1, 0.8f, 0.9f, 1.f, true, 1.2f);
+        if (b.stateT > 2.f) { b.state = 3; b.stateT = 0; }
+    } else if (b.state == 3) {
+        if (b.stateT < dt * 1.5f) {   // рывок вниз, всплеск
+            spawnPuff((float)b.x, (float)surf, (float)b.z, 10, 0.85f, 0.92f, 1.f, false, 3.f);
+            playSound(SND_BITE, 0.8f, 0.95f + r.f() * 0.1f);
+        }
+        if (b.stateT > 0.95f + 0.12f * g_lureLuck) {   // не успел — сорвалась
+            if (b.fishMob >= 0 && b.fishMob < (int)g_mobs.size()) { g_mobs[b.fishMob].bait = false; g_mobs[b.fishMob].fleeT = 3.f; }
+            b.fishMob = -1; b.state = 1; b.stateT = 0; b.waitT = fishWait(g_lureLuck);
+        }
+    }
 }
 
 static void updateInteraction(float dt) {
@@ -3981,6 +5652,7 @@ static void updateInteraction(float dt) {
                 Mob& m = g_mobs[g_targetMob];
                 float dmg = 1;
                 if (isTool(held.id)) dmg = toolKind(held.id) == TK_SWORD ? SWORD_DMG[toolMat(held.id)] : 2.f + toolMat(held.id) * 0.5f;
+                dmg += enchLvl(held, EN_DMG) * 1.25f;   // «Урон»
                 if (g_mode == GM_CREATIVE) dmg = 100;
                 mobHurt(m, dmg, P.x, P.z);
                 damageTool(held, isTool(held.id) && toolKind(held.id) == TK_SWORD ? 1 : 2);
@@ -4014,6 +5686,27 @@ static void updateInteraction(float dt) {
             if (g_in.digPressed) { P.swing = 1.f; playSound(SND_SWING, 0.4f); }
         }
     } else g_dig.active = false;
+    // броня в руке: «поставить» — надеть (сменить на надетую)
+    if (isArmor(held.id) && g_in.placePressed) {
+        if (g_target.hit && tryInteract(g_target)) return;
+        int pc = armorPiece(held.id);
+        std::swap(P.armor[pc], held);
+        playSound(SND_DIG0 + SM_STONE, 0.6f, 1.4f);
+        showMsg("НАДЕТО: " + stackName(P.armor[pc]), 1.5f);
+        return;
+    }
+    // удочка: касание — забросить, ещё касание — подсечь и вытащить
+    if (held.id == I_ROD) {
+        u8 tb = g_target.hit ? getBlock(g_target.x, g_target.y, g_target.z) : 0;
+        bool usable = tb == B_CRAFT || tb == B_CHEST || tb == B_FURNACE || tb == B_FURNACE_LIT || tb == B_DOOR || tb == B_BED || tb == B_ANVIL;
+        if (g_in.placePressed) {
+            if (g_bob.active) rodReel(held);
+            else if (usable) tryInteract(g_target);
+            else rodCast();
+            g_placeCd = 0.28f;
+        }
+        return;
+    }
     // лук: удерживать «поставить» — натянуть, отпустить — выстрел
     if (held.id == I_BOW) {
         bool hasArrow = g_mode == GM_CREATIVE || countItem(I_ARROW) > 0;
@@ -4134,21 +5827,36 @@ static int mobParts(int type, MPart* p) {
     auto add = [&](float x, float y, float z, float sx, float sy, float sz, int tf, int ts, int tt, int sw) {
         MPart m = {x, y, z, sx, sy, sz, tf, ts, tt, sw}; p[n++] = m; };
     switch (type) {
-        case MOB_TOPTUN:
-            add(0, 0.85f, 0, 0.8f, 0.6f, 1.2f, T_TOPTUN_SIDE, T_TOPTUN_SIDE, T_TOPTUN_SIDE, 0);
-            add(0, 1.05f, 0.78f, 0.56f, 0.5f, 0.42f, T_TOPTUN_FACE, T_TOPTUN_SIDE, T_TOPTUN_SIDE, 0);
-            add(0, 1.4f, 0.86f, 0.1f, 0.22f, 0.1f, T_HORN, T_HORN, T_HORN, 0);
-            add(0.25f, 0.28f, 0.4f, 0.22f, 0.56f, 0.22f, T_TOPTUN_LEG, T_TOPTUN_LEG, T_TOPTUN_LEG, 1);
-            add(-0.25f, 0.28f, 0.4f, 0.22f, 0.56f, 0.22f, T_TOPTUN_LEG, T_TOPTUN_LEG, T_TOPTUN_LEG, 2);
-            add(0.25f, 0.28f, -0.4f, 0.22f, 0.56f, 0.22f, T_TOPTUN_LEG, T_TOPTUN_LEG, T_TOPTUN_LEG, 2);
-            add(-0.25f, 0.28f, -0.4f, 0.22f, 0.56f, 0.22f, T_TOPTUN_LEG, T_TOPTUN_LEG, T_TOPTUN_LEG, 1);
+        case MOB_TOPTUN:   // як: длинное тело, горб, бахрома шерсти, голова низко впереди, рога в стороны
+            add(0.24f, 0.30f, 0.40f, 0.2f, 0.6f, 0.2f, T_YAK_LEG, T_YAK_LEG, T_YAK_LEG, 1);
+            add(-0.24f, 0.30f, 0.40f, 0.2f, 0.6f, 0.2f, T_YAK_LEG, T_YAK_LEG, T_YAK_LEG, 2);
+            add(0.24f, 0.30f, -0.42f, 0.2f, 0.6f, 0.2f, T_YAK_LEG, T_YAK_LEG, T_YAK_LEG, 2);
+            add(-0.24f, 0.30f, -0.42f, 0.2f, 0.6f, 0.2f, T_YAK_LEG, T_YAK_LEG, T_YAK_LEG, 1);
+            add(0, 0.90f, -0.02f, 0.80f, 0.56f, 1.24f, T_YAK_BODY, T_YAK_BODY, T_YAK_TOP, 0);
+            add(0, 0.58f, -0.02f, 0.86f, 0.24f, 1.16f, T_YAK_FRINGE, T_YAK_FRINGE, T_YAK_TOP, 0);
+            add(0, 1.24f, 0.22f, 0.62f, 0.2f, 0.52f, T_YAK_BODY, T_YAK_BODY, T_YAK_TOP, 0);
+            add(0, 0.92f, 0.80f, 0.48f, 0.46f, 0.44f, T_YAK_FACE, T_YAK_HEADSIDE, T_YAK_TOP, 0);
+            add(0, 0.62f, 0.80f, 0.42f, 0.18f, 0.36f, T_YAK_FRINGE, T_YAK_FRINGE, T_YAK_TOP, 0);
+            add(0, 0.80f, 1.06f, 0.32f, 0.22f, 0.12f, T_YAK_MUZZLE, T_YAK_MUZZLE, T_YAK_MUZZLE, 0);
+            add(0.36f, 1.08f, 0.80f, 0.26f, 0.10f, 0.10f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);   // рога: в стороны, затем вверх и вперёд
+            add(-0.36f, 1.08f, 0.80f, 0.26f, 0.10f, 0.10f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);
+            add(0.47f, 1.22f, 0.82f, 0.09f, 0.22f, 0.09f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);
+            add(-0.47f, 1.22f, 0.82f, 0.09f, 0.22f, 0.09f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);
+            add(0.44f, 1.35f, 0.88f, 0.07f, 0.08f, 0.10f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);
+            add(-0.44f, 1.35f, 0.88f, 0.07f, 0.08f, 0.10f, T_YAK_HORN, T_YAK_HORN, T_YAK_HORN, 0);
+            add(0, 0.82f, -0.68f, 0.1f, 0.44f, 0.08f, T_YAK_TAIL, T_YAK_TAIL, T_YAK_TAIL, 0);
             break;
-        case MOB_PUKH:
-            add(0, 0.44f, 0, 0.56f, 0.5f, 0.56f, T_PUKH_FACE, T_PUKH_BODY, T_PUKH_BODY, 0);
-            add(0.16f, 0.74f, -0.05f, 0.1f, 0.14f, 0.1f, T_PUKH_BODY, T_PUKH_BODY, T_PUKH_BODY, 0);
-            add(-0.16f, 0.74f, -0.05f, 0.1f, 0.14f, 0.1f, T_PUKH_BODY, T_PUKH_BODY, T_PUKH_BODY, 0);
-            add(0.13f, 0.1f, 0, 0.1f, 0.2f, 0.1f, T_PUKH_LEG, T_PUKH_LEG, T_PUKH_LEG, 1);
-            add(-0.13f, 0.1f, 0, 0.1f, 0.2f, 0.1f, T_PUKH_LEG, T_PUKH_LEG, T_PUKH_LEG, 2);
+        case MOB_PUKH:     // утка: лапы, серые бока, рыжая грудка, ошейник, зелёная голова, плоский клюв
+            add(0.09f, 0.08f, 0.0f, 0.05f, 0.16f, 0.05f, T_DUCK_FOOT, T_DUCK_FOOT, T_DUCK_FOOT, 1);
+            add(-0.09f, 0.08f, 0.0f, 0.05f, 0.16f, 0.05f, T_DUCK_FOOT, T_DUCK_FOOT, T_DUCK_FOOT, 2);
+            add(0.09f, 0.015f, 0.05f, 0.14f, 0.03f, 0.18f, T_DUCK_FOOT, T_DUCK_FOOT, T_DUCK_FOOT, 1);
+            add(-0.09f, 0.015f, 0.05f, 0.14f, 0.03f, 0.18f, T_DUCK_FOOT, T_DUCK_FOOT, T_DUCK_FOOT, 2);
+            add(0, 0.33f, -0.04f, 0.38f, 0.28f, 0.58f, T_DUCK_SIDE, T_DUCK_SIDE, T_DUCK_TOP, 0);
+            add(0, 0.33f, 0.26f, 0.32f, 0.24f, 0.12f, T_DUCK_CHEST, T_DUCK_CHEST, T_DUCK_CHEST, 0);
+            add(0, 0.44f, -0.38f, 0.22f, 0.10f, 0.14f, T_DUCK_TAIL, T_DUCK_TAIL, T_DUCK_TAIL, 0);
+            add(0, 0.53f, 0.24f, 0.15f, 0.20f, 0.15f, T_DUCK_NECK, T_DUCK_NECK, T_DUCK_HEAD, 0);
+            add(0, 0.68f, 0.27f, 0.22f, 0.20f, 0.26f, T_DUCK_HEAD, T_DUCK_HEADSIDE, T_DUCK_HEAD, 0);
+            add(0, 0.64f, 0.47f, 0.15f, 0.05f, 0.16f, T_DUCK_BILL, T_DUCK_BILL, T_DUCK_BILL, 0);
             break;
         case MOB_GNIL:   // пень на корнях
             add(0, 0.78f, 0, 0.8f, 0.9f, 0.8f, T_GNIL_FACE, T_GNIL_BODY, T_GNIL_TOP, 0);
@@ -4208,6 +5916,181 @@ static int mobParts(int type, MPart* p) {
     }
     return n;
 }
+// ---------------------------------------------------------------- рыба в 3D: круглое тело из колец, изгибается при плавании
+static const float FISH_WIDTH[4] = {0.52f, 0.42f, 0.6f, 0.72f};   // толщина тела относительно высоты
+// axis — точка на оси тела: грань видна, если смотрит от оси к камере (не зависит от порядка вершин)
+static void emitFishQuad(const float (*W)[3], const float (*UV)[2], const float* col, float shade, float fa, const float* axis) {
+    if (axis) {
+        float cx = (W[0][0] + W[1][0] + W[2][0] + W[3][0]) * 0.25f, cy = (W[0][1] + W[1][1] + W[2][1] + W[3][1]) * 0.25f, cz = (W[0][2] + W[1][2] + W[2][2] + W[3][2]) * 0.25f;
+        if ((cx - axis[0]) * cx + (cy - axis[1]) * cy + (cz - axis[2]) * cz >= 0) return;
+    }
+    float C[4][4];
+    for (int k = 0; k < 4; k++) { C[k][0] = col[0] * shade; C[k][1] = col[1] * shade; C[k][2] = col[2] * shade; C[k][3] = fa; }
+    emitQuadRel(W, UV, C);
+}
+static void emitFish(const Mob& m, float rx, float ry, float rz, const float* col, float fa) {
+    const FishSpec& S = FISH[m.var];
+    const float Lw = S.len3d, Lb = Lw * S.Lb;
+    // базис рыбы: f — вперёд (к голове), rt — вправо, up — вверх
+    float cp = cosf(m.pitch), sp = sinf(m.pitch), cyw = cosf(m.yaw), syw = sinf(m.yaw);
+    float f[3] = {syw * cp, sp, cyw * cp}, rt[3] = {cyw, 0, -syw};
+    float up[3] = {rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]};
+    if (up[1] < 0) for (int i = 0; i < 3; i++) up[i] = -up[i];
+    bool out = m.walk > 2.f;   // на суше лежит на боку
+    if (out) { float tmp[3]; memcpy(tmp, up, 12); for (int i = 0; i < 3; i++) { up[i] = rt[i]; rt[i] = -tmp[i]; } }
+    float c0[3] = {rx, ry + 0.15f, rz};
+    float amp = (0.035f + std::min(0.09f, m.walk * 0.03f)) * Lw;
+    auto wig = [&](float t) { return amp * sinf(m.phase - t * 5.f) * (0.12f + t * t * 1.3f); };
+    auto P3 = [&](float t, float lx, float ly, float* o) {   // t — вдоль тела (0 нос), lx — вбок, ly — вверх
+        float ax = Lw * 0.5f - t * Lb;
+        float wx = lx + wig(t);
+        for (int i = 0; i < 3; i++) o[i] = c0[i] + f[i] * ax + rt[i] * wx + up[i] * ly;
+    };
+    const int NS = 8, NR = 8;
+    static const float TS[NS] = {0.f, 0.045f, 0.13f, 0.28f, 0.48f, 0.68f, 0.86f, 1.f};
+    float ring[NS][NR][3], vv[NR];
+    float ca[NR], sa[NR];
+    for (int k = 0; k < NR; k++) { float a = (k + 0.5f) * 6.2831853f / NR; ca[k] = cosf(a); sa[k] = sinf(a); vv[k] = (1.f - sa[k]) * 8.f; }
+    for (int i = 0; i < NS; i++) {
+        float t = TS[i], ht = fishProf(S.top, t) * Lw, hb = fishProf(S.bot, t) * Lw;
+        float wd = (ht + hb) * 0.5f * FISH_WIDTH[m.var];
+        if (i == 0) { ht = hb = wd = 0.f; }
+        for (int k = 0; k < NR; k++) P3(t, ca[k] * wd, sa[k] > 0 ? sa[k] * ht : sa[k] * hb, ring[i][k]);
+    }
+    int skin = T_FSKIN0 + m.var;
+    for (int i = 0; i + 1 < NS; i++) for (int k = 0; k < NR; k++) {
+        int k2 = (k + 1) % NR;
+        float W[4][3], UV[4][2];
+        memcpy(W[0], ring[i][k], 12); memcpy(W[1], ring[i + 1][k], 12); memcpy(W[2], ring[i + 1][k2], 12); memcpy(W[3], ring[i][k2], 12);
+        tileUV(skin, TS[i] * 16.f, vv[k], UV[0]); tileUV(skin, TS[i + 1] * 16.f, vv[k], UV[1]);
+        tileUV(skin, TS[i + 1] * 16.f, vv[k2], UV[2]); tileUV(skin, TS[i] * 16.f, vv[k2], UV[3]);
+        float ny = (sa[k] + sa[k2]) * 0.5f;
+        float sh = 0.72f + 0.3f * ny;
+        float ax[3]; float tm = (TS[i] + TS[i + 1]) * 0.5f; P3(tm, 0, (fishProf(S.top, tm) - fishProf(S.bot, tm)) * 0.5f * Lw, ax);
+        emitFishQuad(W, UV, col, sh, fa, ax);
+    }
+    // тонкий плавник: quad от основания вдоль тела до края (двусторонний, без отсечения)
+    auto fin = [&](int tile, float t0, float t1, float y0a, float y0b, float hgt, bool down, float side, float flip) {
+        float W[4][3], UV[4][2];
+        P3(t0, side, y0a, W[0]); P3(t1, side, y0b, W[1]);
+        float d = down ? -hgt : hgt;
+        P3(t1 + hgt * 0.35f / Lb * flip, side, y0b + d, W[2]); P3(t0 + hgt * 0.25f / Lb * flip, side, y0a + d, W[3]);
+        float vb = down ? 0.f : 16.f, vt = down ? 16.f : 0.f;
+        tileUV(tile, 0, vb, UV[0]); tileUV(tile, 16, vb, UV[1]); tileUV(tile, 16, vt, UV[2]); tileUV(tile, 0, vt, UV[3]);
+        emitFishQuad(W, UV, col, 0.9f, fa, nullptr);
+    };
+    float hmax = 0; for (int i = 0; i < S.nd; i++) hmax = std::max(hmax, S.dors[i].h);
+    {   // спинной плавник: тайл содержит все спинные плавники
+        float a0 = S.dors[0].t0, a1 = S.dors[S.nd - 1].t1;
+        float y0 = fishProf(S.top, a0 / S.Lb) * Lw * 0.9f, y1 = fishProf(S.top, a1 / S.Lb) * Lw * 0.9f;
+        float W[4][3], UV[4][2], H = hmax * 1.05f * Lw;
+        float t0 = a0 / S.Lb, t1 = a1 / S.Lb;
+        P3(t0, 0, y0, W[0]); P3(t1, 0, y1, W[1]); P3(t1, 0, y1 + H, W[2]); P3(t0, 0, y0 + H, W[3]);
+        tileUV(T_FFIN0 + m.var, 0, 16, UV[0]); tileUV(T_FFIN0 + m.var, 16, 16, UV[1]); tileUV(T_FFIN0 + m.var, 16, 0, UV[2]); tileUV(T_FFIN0 + m.var, 0, 0, UV[3]);
+        emitFishQuad(W, UV, col, 0.92f, fa, nullptr);
+    }
+    {   // анальный и брюшные плавники — тот же рисунок, перевёрнутый
+        float t0 = S.anal.t0 / S.Lb, t1 = S.anal.t1 / S.Lb;
+        fin(T_FFIN0 + m.var, t0, t1, -fishProf(S.bot, t0) * Lw * 0.9f, -fishProf(S.bot, t1) * Lw * 0.9f, S.anal.h * Lw, true, 0.f, 1.f);
+        float p0 = S.pelv.t0 / S.Lb, p1 = S.pelv.t1 / S.Lb, wd = fishProf(S.bot, p0) * Lw * FISH_WIDTH[m.var] * 0.3f;
+        for (int sd = -1; sd <= 1; sd += 2)
+            fin(T_FFIN0 + m.var, p0, p1, -fishProf(S.bot, p0) * Lw * 0.7f, -fishProf(S.bot, p1) * Lw * 0.7f, S.pelv.h * Lw * 0.8f, true, sd * wd, 1.f);
+    }
+    {   // грудные плавники: веером в стороны, машут
+        float tg = (S.eyeT * 2.25f + 0.06f) / S.Lb, wd = (fishProf(S.top, tg) + fishProf(S.bot, tg)) * 0.5f * Lw * FISH_WIDTH[m.var];
+        float flap = 0.5f + 0.35f * sinf(m.phase * 1.7f);
+        for (int sd = -1; sd <= 1; sd += 2) {
+            float W[4][3], UV[4][2], len = 0.09f * Lw;
+            float yb = -fishProf(S.bot, tg) * Lw * 0.25f;
+            P3(tg, sd * wd * 0.95f, yb + 0.01f * Lw, W[0]); P3(tg, sd * wd * 0.95f, yb - 0.03f * Lw, W[1]);
+            float ox = sd * (wd + len * flap), back = tg + len * 1.1f / Lb;
+            P3(back, ox, yb - 0.05f * Lw, W[2]); P3(back - 0.01f, ox, yb + 0.01f * Lw, W[3]);
+            int tl = T_FTAIL0 + m.var;
+            tileUV(tl, 0, 6, UV[0]); tileUV(tl, 0, 10, UV[1]); tileUV(tl, 16, 13, UV[2]); tileUV(tl, 16, 3, UV[3]);
+            emitFishQuad(W, UV, col, 0.85f, fa, nullptr);
+        }
+    }
+    {   // хвост: продолжает изгиб тела
+        float ped = (fishProf(S.top, 1.f) - fishProf(S.bot, 1.f)) * 0.5f * Lw;
+        float tl = (1.f - S.Lb) * Lw * 1.05f, th = S.tailH * Lw;
+        float slope = (wig(1.f) - wig(0.96f)) / (0.04f * Lb);
+        float W[4][3], UV[4][2];
+        float b0[3]; P3(1.f, 0, ped, b0);
+        auto tp = [&](float s, float y, float* o) {
+            float lat = slope * s * tl * 1.4f;
+            for (int i = 0; i < 3; i++) o[i] = b0[i] - f[i] * s * tl + rt[i] * lat + up[i] * y;
+        };
+        tp(-0.04f, th, W[0]); tp(1.f, th, W[1]); tp(1.f, -th, W[2]); tp(-0.04f, -th, W[3]);
+        int t = T_FTAIL0 + m.var;
+        tileUV(t, 0, 0, UV[0]); tileUV(t, 16, 0, UV[1]); tileUV(t, 16, 16, UV[2]); tileUV(t, 0, 16, UV[3]);
+        emitFishQuad(W, UV, col, 0.9f, fa, nullptr);
+    }
+    {   // глаза: круглые, чуть выпуклые наклейки на боках головы
+        float et = S.eyeT / S.Lb * 0.95f, ey = fishProf(S.top, et) * S.eyeV * Lw;
+        float wd = (fishProf(S.top, et) + fishProf(S.bot, et)) * 0.5f * Lw * FISH_WIDTH[m.var];
+        float er = std::max(S.eyeR * Lw * 1.1f, 0.014f);
+        int tl = T_FEYE0 + m.var;
+        for (int sd = -1; sd <= 1; sd += 2) {
+            float W[4][3], UV[4][2], lx = sd * (wd * 0.86f + 0.004f);
+            P3(et - er / Lb, lx, ey + er, W[0]); P3(et + er / Lb, lx, ey + er, W[1]); P3(et + er / Lb, lx, ey - er, W[2]); P3(et - er / Lb, lx, ey - er, W[3]);
+            tileUV(tl, 0, 0, UV[0]); tileUV(tl, 16, 0, UV[1]); tileUV(tl, 16, 16, UV[2]); tileUV(tl, 0, 16, UV[3]);
+            float ax[3]; P3(et, 0, ey, ax);
+            float bright[3] = {std::min(1.f, col[0] * 1.15f), std::min(1.f, col[1] * 1.15f), std::min(1.f, col[2] * 1.15f)};
+            emitFishQuad(W, UV, bright, 1.f, fa, ax);
+        }
+    }
+}
+// поплавок и леска
+static void emitFishingLine() {
+    if (!g_bob.active) return;
+    const Camera& c = g_cam;
+    float bx = (float)(g_bob.x - c.x), by = (float)(g_bob.y - c.y), bz = (float)(g_bob.z - c.z);
+    float lc[3]; lightColorAt(g_bob.x, g_bob.y + 0.3, g_bob.z, lc);
+    // поплавок: красный низ, белый верх, тёмная антенна с красным кончиком
+    {
+        auto box = [&](float y0, float y1, float hw, float r0, float g0, float b0) {
+            float corner[8][3];
+            for (int k = 0; k < 8; k++) { corner[k][0] = bx + ((k & 1) ? hw : -hw); corner[k][1] = by + ((k & 2) ? y1 : y0); corner[k][2] = bz + ((k & 4) ? hw : -hw); }
+            int tiles[6] = {T_WHITE, T_WHITE, T_WHITE, T_WHITE, T_WHITE, T_WHITE};
+            float cc[3] = {lc[0] * r0, lc[1] * g0, lc[2] * b0};
+            emitBox8(corner, tiles, cc, 1.f, false);
+        };
+        box(-0.08f, 0.0f, 0.065f, 0.85f, 0.14f, 0.12f);
+        box(-0.12f, -0.08f, 0.035f, 0.75f, 0.12f, 0.1f);
+        box(0.0f, 0.07f, 0.058f, 0.95f, 0.94f, 0.9f);
+        box(0.07f, 0.19f, 0.01f, 0.15f, 0.15f, 0.15f);
+        box(0.19f, 0.23f, 0.016f, 0.95f, 0.2f, 0.15f);
+    }
+    // кончик удочки: точка, которую запомнила рука (в пространстве камеры) -> в мир
+    float tip[3];
+    if (g_rodTipOK) for (int i = 0; i < 3; i++) tip[i] = c.r[i] * g_rodTipCam[0] + c.u[i] * g_rodTipCam[1] + c.f[i] * g_rodTipCam[2];
+    else for (int i = 0; i < 3; i++) tip[i] = c.r[i] * 0.35f - c.u[i] * 0.1f + c.f[i] * 1.f;
+    float A[3] = {tip[0], tip[1], tip[2]}, B[3] = {bx, by + 0.18f, bz};
+    float dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2], L = sqrtf(dx * dx + dy * dy + dz * dz);
+    float sag = g_bob.state == 3 ? 0.02f : (g_bob.state == 0 ? 0.05f * L : std::min(1.5f, 0.08f * L));
+    const int N = 18;
+    float pts[N + 1][3];
+    for (int i = 0; i <= N; i++) {
+        float t = i / (float)N;
+        pts[i][0] = A[0] + dx * t; pts[i][1] = A[1] + dy * t - sag * 4.f * t * (1 - t); pts[i][2] = A[2] + dz * t;
+    }
+    float lineCol[3] = {lc[0] * 0.88f, lc[1] * 0.88f, lc[2] * 0.85f};
+    for (int i = 0; i < N; i++) {
+        float* p0 = pts[i]; float* p1 = pts[i + 1];
+        float d[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+        float m[3] = {(p0[0] + p1[0]) * 0.5f, (p0[1] + p1[1]) * 0.5f, (p0[2] + p1[2]) * 0.5f};
+        float sx = d[1] * m[2] - d[2] * m[1], sy = d[2] * m[0] - d[0] * m[2], sz = d[0] * m[1] - d[1] * m[0];
+        float sl = sqrtf(sx * sx + sy * sy + sz * sz) + 1e-6f;
+        float dist = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+        float w = std::max(0.004f, dist * 0.0018f);
+        sx = sx / sl * w; sy = sy / sl * w; sz = sz / sl * w;
+        float W[4][3] = {{p0[0] - sx, p0[1] - sy, p0[2] - sz}, {p1[0] - sx, p1[1] - sy, p1[2] - sz}, {p1[0] + sx, p1[1] + sy, p1[2] + sz}, {p0[0] + sx, p0[1] + sy, p0[2] + sz}};
+        float UV[4][2]; for (int k = 0; k < 4; k++) tileUV(T_WHITE, 8, 8, UV[k]);
+        float C[4][4]; for (int k = 0; k < 4; k++) { C[k][0] = lineCol[0]; C[k][1] = lineCol[1]; C[k][2] = lineCol[2]; C[k][3] = 0.95f; }
+        emitQuadRel(W, UV, C);
+    }
+}
+
 static void emitMobs() {
     float maxD = (float)(g_renderDist * 16);
     for (const Mob& m : g_mobs) {
@@ -4219,6 +6102,17 @@ static void emitMobs() {
         float col[3]; lightColorAt(m.x, m.y + MD[m.type].h * 0.6, m.z, col);
         if (m.hurtT > 0) { col[0] = std::min(1.f, col[0] + 0.5f); col[1] *= 0.45f; col[2] *= 0.45f; }
         float fa = fogAlpha(d2);
+        if (m.type == MOB_FISH) {   // в воде рыбу освещает свет, проходящий сквозь толщу сверху
+            int fx = ifloor(m.x), fz = ifloor(m.z), fy = ifloor(m.y + 0.15), sy = fy;
+            while (sy < fy + 8 && getBlock(fx, sy, fz) == B_WATER) sy++;
+            if (sy != fy) {
+                float sc[3]; lightColorAt(m.x, sy + 0.5, m.z, sc);
+                float k = std::max(0.45f, 1.f - (sy - fy) * 0.09f);
+                for (int i = 0; i < 3; i++) col[i] = std::max(col[i], sc[i] * k);
+                if (m.hurtT > 0) { col[0] = std::min(1.f, col[0] + 0.5f); col[1] *= 0.45f; col[2] *= 0.45f; }
+            }
+            emitFish(m, rx, ry, rz, col, fa); continue;
+        }
         MPart parts[24]; int n = mobParts(m.type, parts);
         float cy = cosf(m.yaw), sy = sinf(m.yaw);
         float swingA = sinf(m.walk) * 0.7f;
@@ -4451,7 +6345,9 @@ static void emitHand() {
         return;
     }
     int t = itemTile(s.id);
-    bool tool = isTool(s.id);
+    bool tool = isTool(s.id) || s.id == I_ROD;
+    g_rodTipOK = false;
+    if (s.id == I_ROD) t = T_ROD_HAND;
     if (bow) {
         // лук стоит вертикально, тетива к нам; при натяжении наклоняется
         Basis3 B = bEuler(-0.55f, 0.f, -0.3f - pull * 0.1f, hx - 0.02f, hy + 0.16f, hz + 0.08f);
@@ -4477,6 +6373,9 @@ static void emitHand() {
     for (int i = 0; i < 3; i++) F.o[i] = 0;
     float g[3]; bApply(F, gl[0], gl[1], gl[2], g);
     F.o[0] = hx - g[0]; F.o[1] = hy + 0.02f - g[1]; F.o[2] = hz + 0.02f - g[2];
+    if (s.id == I_ROD) {   // кончик запоминаем для лески
+        bApply(F, (14.4f - 8.f) * k, (8.f - 1.3f) * k, 0.f, g_rodTipCam); g_rodTipOK = true;
+    }
     emitExtruded(t, F, size, col);
 }
 
@@ -4490,13 +6389,13 @@ static const int MAX_WORLDS = 6;
 static std::string worldPath(int slot) { char b[64]; snprintf(b, sizeof(b), "buildworld_world_%d.sav", slot); return g_basePath + b; }
 
 struct WBuf {
-    std::vector<u8> d; size_t p = 0; bool bad = false;
+    std::vector<u8> d; size_t p = 0; bool bad = false; u32 ver = 2;
     void put(const void* s, size_t n) { const u8* b = (const u8*)s; d.insert(d.end(), b, b + n); }
     template <class T> void w(T v) { put(&v, sizeof(T)); }
     void get(void* o, size_t n) { if (p + n > d.size()) { bad = true; memset(o, 0, n); return; } memcpy(o, d.data() + p, n); p += n; }
     template <class T> T r() { T v; get(&v, sizeof(T)); return v; }
-    void ws(const Stack& s) { w<u16>(s.id); w<u16>(s.cnt); w<u16>(s.dmg); }
-    Stack rs() { Stack s; s.id = r<u16>(); s.cnt = r<u16>(); s.dmg = r<u16>(); if (s.id >= I_END || (s.id >= B_COUNT && s.id < I_STICK)) s.clear(); return s; }
+    void ws(const Stack& s) { w<u16>(s.id); w<u16>(s.cnt); w<u16>(s.dmg); w<u16>(s.ench); }
+    Stack rs() { Stack s; s.id = r<u16>(); s.cnt = r<u16>(); s.dmg = r<u16>(); s.ench = ver >= 2 ? r<u16>() : 0; if (s.id >= I_END || (s.id >= B_COUNT && s.id < I_STICK) || (s.id >= I_ARROW + 1 && s.id < I_TOOL0)) s.clear(); return s; }
     void wstr(const std::string& s) { w<u8>((u8)std::min<size_t>(s.size(), 63)); put(s.data(), std::min<size_t>(s.size(), 63)); }
     std::string rstr() { int n = r<u8>(); std::string s; for (int i = 0; i < n && !bad; i++) s += (char)r<u8>(); return s; }
 };
@@ -4531,7 +6430,7 @@ static WorldInfo readWorldInfo(int slot) {
     if (!readFile(worldPath(slot), d)) return wi;
     WBuf b; b.d.swap(d);
     if (b.r<u32>() != SAVE_MAGIC) return wi;
-    b.r<u32>();
+    b.ver = b.r<u32>();
     wi.name = b.rstr(); wi.seed = b.r<u32>(); wi.mode = b.r<u8>(); b.r<float>(); wi.playTime = b.r<float>();
     wi.exists = !b.bad;
     return wi;
@@ -4540,12 +6439,13 @@ static WorldInfo readWorldInfo(int slot) {
 static bool saveWorld() {
     for (auto& kv : g_chunks) if (kv.second->modified) { std::vector<u8> v; encodeChunk(kv.second, v); g_savedChunks[kv.first] = v; }
     WBuf b;
-    b.w<u32>(SAVE_MAGIC); b.w<u32>(1);
+    b.w<u32>(SAVE_MAGIC); b.w<u32>(2);
     b.wstr(g_worldName); b.w<u32>(g_seed); b.w<u8>((u8)g_mode); b.w<float>(g_dayTime); b.w<float>(g_playTime); b.w<i64>(g_tick);
     b.w<double>(P.x); b.w<double>(P.y); b.w<double>(P.z); b.w<float>(g_cam.yaw); b.w<float>(g_cam.pitch);
     b.w<float>(P.health); b.w<float>(P.hunger); b.w<float>(P.exhaustion); b.w<float>(P.air);
     b.w<i32>(P.spawnX); b.w<i32>(P.spawnY); b.w<i32>(P.spawnZ); b.w<u8>((u8)P.sel); b.w<u8>(P.flying ? 1 : 0); b.w<u8>(P.dead ? 1 : 0);
     for (int i = 0; i < 36; i++) b.ws(P.inv[i]);
+    for (int i = 0; i < 4; i++) b.ws(P.armor[i]);
     b.w<u32>((u32)g_chests.size());
     for (auto& kv : g_chests) { b.w<i64>(kv.first); for (int i = 0; i < 27; i++) b.ws(i < (int)kv.second.size() ? kv.second[i] : Stack()); }
     b.w<u32>((u32)g_furnaces.size());
@@ -4563,7 +6463,7 @@ static bool saveWorld() {
 static void resetWorldState() {
     freeAllChunks();
     g_savedChunks.clear(); g_chests.clear(); g_furnaces.clear(); g_grow.clear(); g_sched.clear(); g_pending.clear();
-    g_mobs.clear(); g_drops.clear(); g_parts.clear(); g_arrows.clear();
+    g_mobs.clear(); g_drops.clear(); g_parts.clear(); g_arrows.clear(); g_bob.active = false;
     g_tick = 0; g_playTime = 0; g_dayTime = 0.05f;
     P = Player();
 }
@@ -4573,7 +6473,7 @@ static bool loadWorld(int slot) {
     if (!readFile(worldPath(slot), d)) return false;
     WBuf b; b.d.swap(d);
     if (b.r<u32>() != SAVE_MAGIC) return false;
-    b.r<u32>();
+    b.ver = b.r<u32>();
     resetWorldState();
     g_worldSlot = slot;
     g_worldName = b.rstr(); u32 seed = b.r<u32>(); g_mode = b.r<u8>(); g_dayTime = b.r<float>(); g_playTime = b.r<float>(); g_tick = b.r<i64>();
@@ -4582,6 +6482,7 @@ static bool loadWorld(int slot) {
     P.health = b.r<float>(); P.hunger = b.r<float>(); P.exhaustion = b.r<float>(); P.air = b.r<float>();
     P.spawnX = b.r<i32>(); P.spawnY = b.r<i32>(); P.spawnZ = b.r<i32>(); P.sel = clampi(b.r<u8>(), 0, 8); P.flying = b.r<u8>() != 0; P.dead = b.r<u8>() != 0;
     for (int i = 0; i < 36; i++) P.inv[i] = b.rs();
+    if (b.ver >= 2) for (int i = 0; i < 4; i++) P.armor[i] = b.rs();
     u32 nc = b.r<u32>();
     for (u32 i = 0; i < nc && !b.bad; i++) { i64 k = b.r<i64>(); std::vector<Stack> v(27); for (int j = 0; j < 27; j++) v[j] = b.rs(); g_chests[k] = v; }
     u32 nf = b.r<u32>();
@@ -4603,7 +6504,7 @@ static bool loadWorld(int slot) {
 static void deleteWorld(int slot) { remove(worldPath(slot).c_str()); }
 
 // ---------------------------------------------------------------- настройки
-struct Settings { int renderDist = 6; float sens = 1.0f; float volume = 0.8f; int inset = 4; bool showFps = false; bool autoJump = true; float uiScale = 1.0f; int shaders = 2; };
+struct Settings { int renderDist = 6; float sens = 1.0f; float volume = 0.8f; int inset = 4; bool showFps = false; bool autoJump = true; float uiScale = 1.0f; int shaders = 2; int texRes = 128; };
 static Settings g_set;
 // переезд со старых названий игры: файлы kubomir_* и buildeworld_* переименовываются, чтобы миры не пропали
 static void migrateOldSaves() {
@@ -4621,15 +6522,16 @@ static void migrateOldSaves() {
 static void saveSettings() {
     FILE* f = fopen((g_basePath + "buildworld_settings.cfg").c_str(), "w");
     if (!f) return;
-    fprintf(f, "%d %f %f %d %d %d %f %d\n", g_set.renderDist, g_set.sens, g_set.volume, g_set.inset, g_set.showFps ? 1 : 0, g_set.autoJump ? 1 : 0, g_set.uiScale, g_set.shaders);
+    fprintf(f, "%d %f %f %d %d %d %f %d %d\n", g_set.renderDist, g_set.sens, g_set.volume, g_set.inset, g_set.showFps ? 1 : 0, g_set.autoJump ? 1 : 0, g_set.uiScale, g_set.shaders, g_set.texRes);
     fclose(f);
 }
 static void loadSettings() {
     FILE* f = fopen((g_basePath + "buildworld_settings.cfg").c_str(), "r");
     if (!f) return;
-    int rd = 6, inset = 4, fps = 0, aj = 1, sh = 2; float sens = 1, vol = 0.8f, ui = 1.f;
-    if (fscanf(f, "%d %f %f %d %d %d %f %d", &rd, &sens, &vol, &inset, &fps, &aj, &ui, &sh) >= 4) {
+    int rd = 6, inset = 4, fps = 0, aj = 1, sh = 2, tr = 128; float sens = 1, vol = 0.8f, ui = 1.f;
+    if (fscanf(f, "%d %f %f %d %d %d %f %d %d", &rd, &sens, &vol, &inset, &fps, &aj, &ui, &sh, &tr) >= 4) {
         g_set.shaders = clampi(sh, 0, 2);
+        g_set.texRes = (tr == 16 || tr == 32 || tr == 64 || tr == 128) ? tr : 128;
         g_set.renderDist = clampi(rd, 4, 10); g_set.sens = clampf(sens, 0.2f, 3.f); g_set.volume = clampf(vol, 0, 1);
         g_set.inset = clampi(inset, 0, 12); g_set.showFps = fps != 0; g_set.autoJump = aj != 0; g_set.uiScale = clampf(ui, 0.7f, 1.4f);
     }
@@ -4643,7 +6545,7 @@ enum Screen { SCR_INTRO = -1, SCR_MAIN = 0, SCR_WORLDS, SCR_NEWWORLD, SCR_LOADIN
 static int g_screen = SCR_INTRO, g_settingsBack = SCR_MAIN;
 static bool g_introSkip = false;   // пропустить заставку (кнопка «назад», клавиша)
 static void screenMain();
-enum InvMode { INV_PLAYER = 0, INV_CRAFT, INV_FURNACE, INV_CHEST };
+enum InvMode { INV_PLAYER = 0, INV_CRAFT, INV_FURNACE, INV_CHEST, INV_ANVIL };
 static int g_invMode = INV_PLAYER;
 static int g_bookPage = 0, g_creativePage = 0;
 // книга рецептов: панель слева от сетки создания
@@ -4653,7 +6555,8 @@ static int g_ghostRecipe = -1;                      // рецепт-подска
 static bool g_altMode = false;           // «по одному»
 static Stack g_cursor;
 static Stack g_craft[9];
-static int g_contX = 0, g_contY = 0, g_contZ = 0;
+static Stack g_anvil[2];   // наковальня: слева предмет, справа книга
+
 static float g_heldNameT = 0;
 
 static float uiS() { return g_H / 100.f; }                            // 1% высоты экрана
@@ -4723,10 +6626,14 @@ static void ringCircle(float cx, float cy, float r, float t, SDL_Color c) {
 }
 
 // ---------------------------------------------------------------- значки предметов
+static bool g_glint = false;    // рисовать значок как переливающееся свечение зачарования
+static Uint8 g_glintC[3] = {160, 80, 255};
 static void drawTile(int tile, float x, float y, float w, float h, Uint8 a = 255) {
-    SDL_Rect src = {(tile & 15) * 16, (tile >> 4) * 16, 16, 16};
+    SDL_Rect src = {(tile & 15) * g_tileRes, (tile >> 4) * g_tileRes, g_tileRes, g_tileRes};
     SDL_Rect dst = {(int)x, (int)y, (int)w, (int)h};
-    SDL_SetTextureColorMod(g_atlasTex, 255, 255, 255); SDL_SetTextureAlphaMod(g_atlasTex, a);
+    if (g_glint) SDL_SetTextureColorMod(g_atlasTex, g_glintC[0], g_glintC[1], g_glintC[2]);
+    else SDL_SetTextureColorMod(g_atlasTex, 255, 255, 255);
+    SDL_SetTextureAlphaMod(g_atlasTex, a);
     SDL_RenderCopy(g_ren, g_atlasTex, &src, &dst);
 }
 static void drawItemIcon(int id, float x, float y, float s) {
@@ -4754,6 +6661,7 @@ static void drawItemIcon(int id, float x, float y, float s) {
             float uv[2]; tileUV(tiles[f], UVp[k][0], UVp[k][1], uv);
             vv.tex_coord.x = uv[0]; vv.tex_coord.y = uv[1];
             Uint8 c = (Uint8)(255 * shade[f]); vv.color.r = c; vv.color.g = c; vv.color.b = c; vv.color.a = 255;
+            if (g_glint) { vv.color.r = (Uint8)(c * g_glintC[0] / 255); vv.color.g = (Uint8)(c * g_glintC[1] / 255); vv.color.b = (Uint8)(c * g_glintC[2] / 255); }
         }
         int* p = idx + f * 6; int b = f * 4;
         p[0] = b; p[1] = b + 1; p[2] = b + 2; p[3] = b; p[4] = b + 2; p[5] = b + 3;
@@ -4761,13 +6669,29 @@ static void drawItemIcon(int id, float x, float y, float s) {
     SDL_SetTextureColorMod(g_atlasTex, 255, 255, 255); SDL_SetTextureAlphaMod(g_atlasTex, 255);
     SDL_RenderGeometry(g_ren, g_atlasTex, v, 12, idx, 18);
 }
+static void drawGlintIcon(int id, float x, float y, float sz) {
+    float t = SDL_GetTicks() * 0.004f, k = 0.6f + 0.4f * sinf(t + x * 0.01f);
+    g_glintC[0] = (Uint8)(170 * k); g_glintC[1] = (Uint8)(90 * k); g_glintC[2] = (Uint8)(255 * k);
+    SDL_SetTextureBlendMode(g_atlasTex, SDL_BLENDMODE_ADD);
+    g_glint = true; drawItemIcon(id, x, y, sz); g_glint = false;
+    SDL_SetTextureBlendMode(g_atlasTex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureColorMod(g_atlasTex, 255, 255, 255);
+}
 static void drawStack(const Stack& s, float x, float y, float sz) {
     if (s.empty()) return;
+    if (s.ench && g_glowTex) {   // мягкое фиолетовое сияние за зачарованным предметом
+        float t = SDL_GetTicks() * 0.003f, k = 0.75f + 0.25f * sinf(t + x * 0.02f);
+        SDL_Rect d = {(int)(x + sz * 0.02f), (int)(y + sz * 0.02f), (int)(sz * 0.96f), (int)(sz * 0.96f)};
+        SDL_SetTextureColorMod(g_glowTex, 150, 70, 255); SDL_SetTextureAlphaMod(g_glowTex, (Uint8)(200 * k));
+        SDL_RenderCopy(g_ren, g_glowTex, nullptr, &d);
+        SDL_SetTextureColorMod(g_glowTex, 255, 255, 255); SDL_SetTextureAlphaMod(g_glowTex, 255);
+    }
     drawItemIcon(s.id, x, y, sz);
+    if (s.ench) drawGlintIcon(s.id, x, y, sz);
     float px = std::max(1.5f, sz / 22.f);
     if (s.cnt > 1) drawText(std::to_string(s.cnt), x + sz - px * 1.5f, y + sz - 8.5f * px, px, C(255, 255, 255), 2);
-    if (isTool(s.id) && s.dmg > 0) {
-        float f = 1.f - s.dmg / (float)MAT_DUR[toolMat(s.id)];
+    if ((isTool(s.id) || isArmor(s.id) || s.id == I_ROD) && s.dmg > 0) {
+        float f = 1.f - s.dmg / (float)maxDur(s.id);
         fillRect(x + sz * 0.12f, y + sz * 0.84f, sz * 0.76f, sz * 0.08f, C(0, 0, 0, 220));
         fillRect(x + sz * 0.12f, y + sz * 0.84f, sz * 0.76f * f, sz * 0.08f, C((int)(255 * (1 - f)), (int)(255 * f), 40));
     }
@@ -4858,7 +6782,7 @@ static void slotClick(Stack& slot, bool alt, bool canPlace = true) {
         else { slot = g_cursor; g_cursor.clear(); }
         return;
     }
-    if (slot.id == g_cursor.id && maxStack(slot.id) > 1) {
+    if (slot.id == g_cursor.id && slot.ench == g_cursor.ench && maxStack(slot.id) > 1) {
         int room = maxStack(slot.id) - slot.cnt;
         int mv = alt ? std::min(1, room) : std::min(room, (int)g_cursor.cnt);
         slot.cnt += mv; g_cursor.cnt -= mv; if (!g_cursor.cnt) g_cursor.clear();
@@ -4867,6 +6791,7 @@ static void slotClick(Stack& slot, bool alt, bool canPlace = true) {
     std::swap(slot, g_cursor);
 }
 static void returnLooseItems() {
+    for (int i = 0; i < 2; i++) if (!g_anvil[i].empty()) { int l = addItem(g_anvil[i]); if (l) { Stack s = g_anvil[i]; s.cnt = (u16)l; spawnDrop(s, P.x, P.y + 1.2, P.z); } g_anvil[i].clear(); }
     for (int i = 0; i < 9; i++) if (!g_craft[i].empty()) { int l = addItem(g_craft[i]); if (l) { Stack s = g_craft[i]; s.cnt = (u16)l; spawnDrop(s, P.x, P.y + 1.2, P.z); } g_craft[i].clear(); }
     if (!g_cursor.empty()) { int l = addItem(g_cursor); if (l) { Stack s = g_cursor; s.cnt = (u16)l; spawnDrop(s, P.x, P.y + 1.2, P.z); } g_cursor.clear(); }
 }
@@ -4880,6 +6805,50 @@ static void openFurnace(int x, int y, int z) {
     g_contX = x; g_contY = y; g_contZ = z;
     if (!g_furnaces.count(posKey(x, y, z))) g_furnaces[posKey(x, y, z)] = Furnace();
     openInventory(INV_FURNACE);
+}
+static void openAnvil() { openInventory(INV_ANVIL); playSound(SND_ANVIL, 0.5f, 1.2f); }
+// результат наковальни: зачарования с книги (или со второго такого же предмета) переносятся на левый предмет
+static bool anvilResult(const Stack& a, const Stack& b, Stack& out, std::string& why) {
+    out.clear(); why.clear();
+    if (a.empty() || b.empty()) return false;
+    bool bBook = b.id == I_EBOOK;
+    bool same = a.id == b.id && (isTool(a.id) || isArmor(a.id) || a.id == I_ROD);
+    if (!bBook && !same) { why = "СПРАВА НУЖНА ЗАЧАРОВАННАЯ КНИГА"; return false; }
+    if (a.id == I_BOOK) { why = "ПРОСТУЮ КНИГУ НЕЛЬЗЯ ЗАЧАРОВАТЬ"; return false; }
+    if (!(a.id == I_EBOOK || isTool(a.id) || isArmor(a.id) || a.id == I_ROD)) { why = "ЭТОТ ПРЕДМЕТ НЕЛЬЗЯ ЗАЧАРОВАТЬ"; return false; }
+    out = a; out.cnt = 1;
+    bool changed = false, anyFit = false, capped = false;
+    for (int e = 0; e < EN_COUNT; e++) {
+        int lb = enchLvl(b, e); if (!lb) continue;
+        if (!enchFits(a.id, e)) continue;
+        anyFit = true;
+        int la = enchLvl(a, e);
+        int nl = (la == lb) ? std::min(EN_MAX[e], la + 1) : std::max(la, lb);   // одинаковые уровни дают следующий
+        if (la == lb && la >= EN_MAX[e]) capped = true;
+        if (nl != la) { setEnch(out, e, nl); changed = true; }
+    }
+    if (same) {   // два одинаковых предмета ещё и чинят друг друга
+        int md = maxDur(a.id), keep = (md - a.dmg) + (md - b.dmg) + md * 12 / 100;
+        int nd = std::max(0, md - keep);
+        if (nd < a.dmg) { out.dmg = (u16)nd; changed = true; }
+    }
+    if (!changed) { out.clear(); why = capped ? "УЖЕ МАКСИМАЛЬНЫЙ УРОВЕНЬ" : (anyFit ? "НИЧЕГО НЕ ИЗМЕНИТСЯ" : "ЭТО ЗАЧАРОВАНИЕ СЮДА НЕ ПОДХОДИТ"); return false; }
+    return true;
+}
+// ячейка брони: принимает только подходящую часть
+static void armorSlot(int piece, float x, float y, float sz) {
+    int id = 1040 + piece;
+    bool hit = uiHit(id, R(x, y, sz, sz));
+    slotBg(x, y, sz, false, uiFocused(id));
+    if (P.armor[piece].empty()) drawTile(T_ARMOR0 + piece, x + sz * 0.15f, y + sz * 0.15f, sz * 0.7f, sz * 0.7f, 50);   // силуэт-подсказка
+    else drawStack(P.armor[piece], x + sz * 0.04f, y + sz * 0.04f, sz * 0.92f);
+    if (!hit) return;
+    if (g_cursor.empty()) {
+        if (!P.armor[piece].empty()) { g_cursor = P.armor[piece]; P.armor[piece].clear(); playSound(SND_CLICK, 0.4f, 1.1f); showTipS(g_cursor, x + sz / 2, y); }
+        else { g_tipText = std::string("СЮДА: ") + ARMOR_PIECE[piece]; g_tipX = x + sz / 2; g_tipY = y; g_tipUntil = SDL_GetTicks() + 1500; }
+    } else if (isArmor(g_cursor.id) && armorPiece(g_cursor.id) == piece) {
+        std::swap(g_cursor, P.armor[piece]); playSound(SND_DIG0 + SM_STONE, 0.6f, 1.4f); showTipS(P.armor[piece], x + sz / 2, y);
+    } else showMsg(std::string("СЮДА МОЖНО ПОЛОЖИТЬ ТОЛЬКО ") + ARMOR_PIECE[piece], 1.6f);
 }
 static void openChest(int x, int y, int z) {
     g_contX = x; g_contY = y; g_contZ = z;
@@ -4922,19 +6891,20 @@ static int recipeState(const Recipe& r) {
     return 0;
 }
 static int bookCategory(int out) {
-    if (isTool(out) || out == I_BOW || out == I_ARROW) return 1;
+    if (isTool(out) || out == I_BOW || out == I_ARROW || isArmor(out) || out == I_ROD) return 1;
     if (isBlockItem(out)) return 2;
     return 3;
 }
-struct BookEntry { int out; std::vector<int> rec; int state; };
+struct BookEntry { int out; int key; u16 ench; std::vector<int> rec; int state; };   // key — предмет вместе с зачарованием
 static void buildBookEntries(std::vector<BookEntry>& list) {
     list.clear();
     for (int i = 0; i < (int)g_recipes.size(); i++) {
         const Recipe& r = g_recipes[i];
         if (g_bookTab != 0 && bookCategory(r.out) != g_bookTab) continue;
         BookEntry* e = nullptr;
-        for (auto& x : list) if (x.out == r.out) e = &x;
-        if (!e) { BookEntry ne; ne.out = r.out; ne.state = 3; list.push_back(ne); e = &list.back(); }
+        int key = r.out | ((int)r.ench << 16);
+        for (auto& x : list) if (x.key == key) e = &x;
+        if (!e) { BookEntry ne; ne.out = r.out; ne.key = key; ne.ench = r.ench; ne.state = 3; list.push_back(ne); e = &list.back(); }
         e->rec.push_back(i);
         e->state = std::min(e->state, recipeState(r));
     }
@@ -4959,7 +6929,7 @@ static bool craftToBag(int ri) {
     std::vector<std::pair<int, int>> need; recipeNeeds(r, need);
     if (!creative) for (auto& n : need) if (countItem(n.first) < n.second) return false;
     if (!creative) for (auto& n : need) removeItem(n.first, n.second);
-    Stack out = mkStack(r.out, r.cnt);
+    Stack out = mkStack(r.out, r.cnt); out.ench = r.ench;
     int left = addItem(out);
     if (left) { out.cnt = (u16)left; spawnDrop(out, P.x, P.y + 1.2, P.z); showMsg("СУМКА ПОЛНА - ПРЕДМЕТ НА ЗЕМЛЕ"); }
     notePickup(r.out, r.cnt);
@@ -5039,21 +7009,22 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
         float sx = gx0 + (i % COLS) * bs, sy = y + (i / COLS) * bs;
         if (li >= (int)list.size()) { fillRect(sx + 2, sy + 2, bs - 4, bs - 4, C(26, 28, 32, 160)); continue; }
         const BookEntry& e = list[li];
-        int wid = 3000 + e.out;
+        int wid = e.ench ? 3300 + e.rec[0] : 3000 + e.out;
         bool hit = uiHit(wid, R(sx + 2, sy + 2, bs - 4, bs - 4));
         bool foc = uiFocused(wid);
         SDL_Color bg = e.state == 0 ? C(44, 62, 46, 235) : (e.state == 1 ? C(78, 36, 36, 235) : C(36, 36, 40, 235));
         SDL_Color br = e.state == 0 ? C(110, 170, 100) : (e.state == 1 ? C(150, 70, 66) : C(70, 70, 76));
         fillRect(sx + 2, sy + 2, bs - 4, bs - 4, bg);
-        frameRect(sx + 2, sy + 2, bs - 4, bs - 4, std::max(1.f, bs * 0.04f), foc ? C(255, 240, 120) : (g_bookSel == e.out ? C(240, 240, 240) : br));
+        frameRect(sx + 2, sy + 2, bs - 4, bs - 4, std::max(1.f, bs * 0.04f), foc ? C(255, 240, 120) : (g_bookSel == e.key ? C(240, 240, 240) : br));
         drawItemIcon(e.out, sx + bs * 0.12f, sy + bs * 0.12f, bs * 0.76f);
+        if (e.ench) drawGlintIcon(e.out, sx + bs * 0.12f, sy + bs * 0.12f, bs * 0.76f);
         const Recipe& r0 = g_recipes[e.rec[0]];
         if (r0.cnt > 1) drawText(std::to_string(r0.cnt), sx + bs - px * 1.5f, sy + bs - px * 9.5f, px * 0.9f, C(255, 255, 255), 2);
         if (e.state != 0) fillRect(sx + 2, sy + 2, bs - 4, bs - 4, C(0, 0, 0, 90));
         if (e.state == 2) { fillRect(sx + bs * 0.52f, sy + bs * 0.04f, bs * 0.44f, bs * 0.44f, C(20, 20, 24, 200)); drawItemIcon(B_CRAFT, sx + bs * 0.54f, sy + bs * 0.06f, bs * 0.4f); }
-        if (foc) focusEntry = e.out;
+        if (foc) focusEntry = e.key;
         if (hit) {
-            g_bookSel = e.out;
+            g_bookSel = e.key;
             int pick = -1;
             for (int ri : e.rec) if (recipeState(g_recipes[ri]) == 0) { pick = ri; break; }
             if (pick < 0) for (int ri : e.rec) if (recipeState(g_recipes[ri]) == 1) { pick = ri; break; }
@@ -5074,9 +7045,10 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
         drawText(g_bookOnlyCan ? "ПОКА НИЧЕГО НЕЛЬЗЯ СДЕЛАТЬ" : "НЕТ РЕЦЕПТОВ", x, y, px * 0.8f, C(200, 200, 200));
     } else if (show >= 0) {
         const Recipe* rp = nullptr;
-        for (const auto& e : list) if (e.out == show) rp = &g_recipes[e.rec[0]];
+        for (const auto& e : list) if (e.key == show) rp = &g_recipes[e.rec[0]];
         if (rp) {
-            float npx = px * 0.95f; std::string nm = itemName(show);
+            Stack ss = mkStack(rp->out, 1); ss.ench = rp->ench;
+            float npx = px * 0.95f; std::string nm = stackName(ss);
             while (textWidth(nm, npx) > iw && npx > 1.2f) npx *= 0.9f;
             drawText(nm, x, y, npx, C(255, 240, 180));
             std::vector<std::pair<int, int>> need; recipeNeeds(*rp, need);
@@ -5111,7 +7083,7 @@ static void drawHandSlot(float x, float y, float w, float sz) {
     fillRect(x, sy, sz, sz, C(60, 50, 20, 230));
     frameRect(x - 2, sy - 2, sz + 4, sz + 4, std::max(2.f, sz * 0.06f), C(255, (int)(200 + 55 * pulse), 90));
     drawStack(g_cursor, x + sz * 0.04f, sy + sz * 0.04f, sz * 0.92f);
-    std::string nm = itemName(g_cursor.id); float npx = px;
+    std::string nm = stackName(g_cursor); float npx = px;
     float tw = w - sz - px * 3; while (textWidth(nm, npx) > tw && npx > 1.1f) npx *= 0.9f;
     drawText(nm, x + sz + px * 2, sy + sz / 2 - 3.5f * npx, npx, C(240, 240, 240));
     { std::string h = "НАЖМИ НА ЯЧЕЙКУ, ЧТОБЫ ПОЛОЖИТЬ"; float hp = px * 0.7f; while (textWidth(h, hp) > w && hp > 1.f) hp *= 0.92f;
@@ -5129,8 +7101,9 @@ static int slotWidget(int id, Stack& s, float x, float y, float sz, bool sel = f
     if (hit) {
         int before = s.id;
         slotClick(s, alt || g_altMode, canPlace); playSound(SND_CLICK, 0.35f, 1.2f);
-        int id = !g_cursor.empty() ? g_cursor.id : (!s.empty() ? s.id : before);
-        showTip(id, x + sz / 2, y);
+        if (!g_cursor.empty()) showTipS(g_cursor, x + sz / 2, y);
+        else if (!s.empty()) showTipS(s, x + sz / 2, y);
+        else showTip(before, x + sz / 2, y);
         return 1;
     }
     return 0;
@@ -5140,6 +7113,9 @@ static std::vector<int> g_creativeItems;
 static void initCreativeItems() {
     for (int b = 1; b < B_COUNT; b++) if (b != B_FURNACE_LIT) g_creativeItems.push_back(b);
     for (int i = I_STICK; i <= I_ARROW; i++) g_creativeItems.push_back(i);
+    g_creativeItems.push_back(I_ROD);
+    for (int i = I_FISH0; i < I_FFRY0 + 4; i++) g_creativeItems.push_back(i);
+    for (int i = I_ARMOR0; i < I_ARMOR0 + 12; i++) g_creativeItems.push_back(i);
     for (int i = I_TOOL0; i < I_TOOL0 + 20; i++) g_creativeItems.push_back(i);
 }
 
@@ -5218,12 +7194,21 @@ static void drawInventoryScreen() {
     }
     if (g_invMode == INV_PLAYER || g_invMode == INV_CRAFT) {
         int n = g_invMode == INV_CRAFT ? 3 : 2;
-        drawText(n == 3 ? "ВЕРСТАК" : "СОЗДАНИЕ", gx, topY, px, C(230, 230, 230));
+        bool armorUI = g_invMode == INV_PLAYER && !creative;
         float cy0 = topY + px * 11;
-        float cx0 = gx + sz * (n == 3 ? 1.5f : 2.0f);
-        // маленькая кнопка-книжка слева от сетки
+        float cx0 = gx + sz * (n == 3 ? 1.5f : (armorUI ? 2.6f : 2.0f));
+        drawText(n == 3 ? "ВЕРСТАК" : "СОЗДАНИЕ", armorUI ? cx0 : gx, topY, px, C(230, 230, 230));
+        if (armorUI) {
+            drawText("БРОНЯ", gx, topY, px, C(230, 230, 230));
+            for (int pc = 0; pc < 4; pc++) armorSlot(pc, gx + (pc % 2) * sz, cy0 + (pc / 2) * sz, sz);
+            int ap = armorPoints(), pl = protectionLevels();
+            float tp = px * 0.75f;
+            std::string a1 = "ЗАЩИТА " + std::to_string(ap * 4 + pl * 4 > 80 ? 80 : ap * 4 + pl * 4) + "%";
+            drawText(a1, gx, cy0 + 2 * sz + tp * 3, tp, C(190, 200, 215));
+        }
+        // маленькая кнопка-книжка слева от сетки (в сумке игрока — справа от результата)
         if (bookAvail) {
-            float kb = sz * 0.9f, kx = gx + sz * 0.15f, ky = cy0 + (n * sz - kb) / 2;
+            float kb = sz * 0.9f, kx = armorUI ? cx0 + sz * 5.05f : gx + sz * 0.15f, ky = cy0 + (n * sz - kb) / 2;
             if (uiHit(2010, R(kx, ky, kb, kb))) { g_bookOpen = !g_bookOpen; playSound(SND_CLICK, 0.45f, 1.1f); }
             fillRect(kx, ky, kb, kb, g_bookOpen ? C(90, 110, 80, 235) : C(40, 42, 50, 235));
             frameRect(kx, ky, kb, kb, 2, uiFocused(2010) ? C(255, 240, 120) : C(120, 124, 134));
@@ -5254,7 +7239,7 @@ static void drawInventoryScreen() {
             fillRect(ox + 2, oy + 2, sz * 1.2f - 4, sz * 1.2f - 4, C(30, 30, 36, 150));
         }
         if (res) {
-            Stack rs = mkStack(res, cnt); drawStack(rs, ox + sz * 0.1f, oy + sz * 0.1f, sz);
+            Stack rs = mkStack(res, cnt); rs.ench = g_matchEnch; drawStack(rs, ox + sz * 0.1f, oy + sz * 0.1f, sz);
             std::string nm = itemName(res); float npx = px * 0.9f, maxW = gx + gridW - (ox - sz * 1.2f);
             while (textWidth(nm, npx) > maxW && npx > 1.2f) npx *= 0.9f;
             drawText(nm, ox + sz * 0.6f, oy + sz * 1.35f, npx, C(255, 240, 180), 1);
@@ -5262,7 +7247,7 @@ static void drawInventoryScreen() {
         if (hit && res) showTip(res, ox + sz * 0.6f, oy);
         if (hit && res) {
             // готовый предмет сразу ложится в сумку; если места нет — остаток в руку
-            Stack out = mkStack(res, cnt);
+            Stack out = mkStack(res, cnt); out.ench = g_matchEnch;
             int left = addItem(out);
             bool ok = left == 0;
             if (!ok && (g_cursor.empty() || (g_cursor.id == res && g_cursor.cnt + left <= maxStack(res)))) {
@@ -5308,6 +7293,32 @@ static void drawInventoryScreen() {
         while (textWidth(h2, hpx) > gx + gridW - ax && hpx > 1.1f) hpx *= 0.9f;
         drawText(h1, ax, fy + sz * 1.75f, hpx, C(190, 190, 190));
         drawText(h2, ax, fy + sz * 1.75f + hpx * 10, hpx, C(190, 190, 190));
+    } else if (g_invMode == INV_ANVIL) {
+        drawText("НАКОВАЛЬНЯ", gx, topY, px, C(230, 230, 230));
+        float ay0 = topY + px * 13, lx = gx + sz * 0.3f, rx = gx + sz * 2.2f, ox = gx + sz * 4.6f;
+        slotWidget(1400, g_anvil[0], lx, ay0, sz);
+        drawText("+", gx + sz * 1.55f, ay0 + sz / 2 - 3.5f * px * 1.6f, px * 1.6f, C(230, 230, 230), 1);
+        slotWidget(1401, g_anvil[1], rx, ay0, sz);
+        drawText(">", gx + sz * 3.75f, ay0 + sz / 2 - 3.5f * px * 2, px * 2, C(230, 230, 230), 1);
+        Stack res; std::string why;
+        bool ok = anvilResult(g_anvil[0], g_anvil[1], res, why);
+        float os = sz * 1.2f, oy = ay0 - sz * 0.1f;
+        bool hit = uiHit(1402, R(ox, oy, os, os));
+        slotBg(ox, oy, os, ok, uiFocused(1402));
+        if (ok) drawStack(res, ox + os * 0.04f, oy + os * 0.04f, os * 0.92f);
+        float tx = gx + sz * 0.3f, ty = ay0 + sz * 1.35f, tp = px * 0.85f;
+        std::string line = ok ? stackName(res) : (why.empty() ? "СЛЕВА - ПРЕДМЕТ, СПРАВА - ЗАЧАРОВАННАЯ КНИГА" : why);
+        float maxW = gridW - sz * 0.4f; while (textWidth(line, tp) > maxW && tp > 1.1f) tp *= 0.92f;
+        drawText(line, tx, ty, tp, ok ? C(200, 160, 255) : (why.empty() ? C(190, 190, 190) : C(235, 150, 140)));
+        drawText("ДВЕ ОДИНАКОВЫЕ КНИГИ - УРОВЕНЬ ВЫШЕ", tx, ty + px * 10, px * 0.7f, C(160, 165, 175));
+        if (hit && ok) {
+            int left = addItem(res);
+            if (left) { if (g_cursor.empty()) g_cursor = res; else spawnDrop(res, P.x, P.y + 1.2, P.z); }
+            g_anvil[0].clear();
+            if (g_anvil[1].cnt > 1) g_anvil[1].cnt--; else g_anvil[1].clear();
+            playSound(SND_ANVIL, 0.8f); playSound(SND_ENCH, 0.5f);
+            showMsg(stackName(res) + " - В СУМКЕ", 2.2f);
+        }
     } else if (g_invMode == INV_CHEST) {
         auto& v = g_chests[posKey(g_contX, g_contY, g_contZ)];
         if (v.size() < 27) v.resize(27);
@@ -5329,13 +7340,17 @@ static void drawInventoryScreen() {
     if (g_ui.pad) {
         for (auto& w : g_ui.cur) if (w.id == g_ui.focus) {
             int id = 0;
-            if (w.id >= 1000 && w.id < 1036) id = P.inv[w.id - 1000].id;
-            else if (w.id >= 1100 && w.id < 1109) id = g_craft[w.id - 1100].id;
-            if (id > 0 && (g_tipText != itemName(id) || SDL_GetTicks() > g_tipUntil)) { g_tipText = itemName(id); g_tipX = w.r.x + w.r.w / 2.f; g_tipY = (float)w.r.y; g_tipUntil = SDL_GetTicks() + 400; }
+            const Stack* st = nullptr;
+            if (w.id >= 1000 && w.id < 1036) st = &P.inv[w.id - 1000];
+            else if (w.id >= 1100 && w.id < 1109) st = &g_craft[w.id - 1100];
+            else if (w.id >= 1040 && w.id < 1044) st = &P.armor[w.id - 1040];
+            if (st && !st->empty()) id = st->id;
+            if (id > 0 && (g_tipText != stackName(*st) || SDL_GetTicks() > g_tipUntil)) { g_tipText = stackName(*st); g_tipX = w.r.x + w.r.w / 2.f; g_tipY = (float)w.r.y; g_tipUntil = SDL_GetTicks() + 400; }
         }
     }
     if (!g_tipText.empty() && SDL_GetTicks() < g_tipUntil) {
-        float tp = px * 1.0f, tw = textWidth(g_tipText, tp), bh = tp * 11;
+        float tp = px * 1.0f; while (textWidth(g_tipText, tp) > g_W * 0.9f && tp > 1.1f) tp *= 0.92f;
+        float tw = textWidth(g_tipText, tp), bh = tp * 11;
         float tx = clampf(g_tipX - tw / 2 - tp * 3, 4.f, g_W - tw - tp * 6 - 4.f), ty = std::max(4.f, g_tipY - bh - tp * 2);
         Uint32 left = g_tipUntil - SDL_GetTicks(); int a = left < 300 ? (int)(left * 255 / 300) : 255;
         fillRect(tx, ty, tw + tp * 6, bh, C(16, 10, 30, a * 235 / 255));
@@ -5407,7 +7422,7 @@ static void drawHotbar() {
     }
     if (g_heldNameT > 0 && !P.inv[P.sel].empty()) {
         float px = fontPx();
-        drawText(itemName(P.inv[P.sel].id), g_W / 2.f, t.hotY - (g_mode == GM_SURVIVAL ? t.hotS * 0.75f : 0) - px * 14, px, C(255, 255, 255, (int)(255 * std::min(1.f, g_heldNameT))), 1);
+        drawText(stackName(P.inv[P.sel]), g_W / 2.f, t.hotY - (g_mode == GM_SURVIVAL ? t.hotS * 0.75f : 0) - px * 14, px, C(255, 255, 255, (int)(255 * std::min(1.f, g_heldNameT))), 1);
     }
 }
 static void drawStatusBars() {
@@ -5424,6 +7439,11 @@ static void drawStatusBars() {
         float fv = P.hunger - (9 - i) * 2;
         int ft = fv >= 2 ? T_FOOD_F : (fv >= 1 ? T_FOOD_H : T_FOOD_E);
         drawTile(ft, t.hotX + t.hotS * 9 - (10 - i) * is * 0.95f, y, is, is);
+    }
+    int ap = armorPoints();
+    if (ap > 0) for (int i = 0; i < 10; i++) {
+        int v = ap - i * 2;
+        drawTile(v >= 2 ? T_ARMHUD_F : (v >= 1 ? T_ARMHUD_H : T_ARMHUD_E), t.hotX + i * is * 0.95f, y - is, is, is);
     }
     if (P.headInWater || P.air < 10) {
         int n = (int)ceilf(P.air);
@@ -5445,6 +7465,11 @@ static void drawHUD() {
         float bw = g_H * 0.12f, bh = std::max(3.f, g_H * 0.008f), by = cy + cs * 1.6f;
         fillRect(cx - bw / 2 - 1, by - 1, bw + 2, bh + 2, C(0, 0, 0, 160));
         fillRect(cx - bw / 2, by, bw * P.bowCharge, bh, P.bowCharge >= 1.f ? C(255, 220, 90, 230) : C(230, 230, 230, 220));
+    }
+    if (g_bob.active && g_bob.state == 3) {   // поклёвка: заметная подсказка у прицела
+        float k = 0.6f + 0.4f * sinf(SDL_GetTicks() * 0.018f), p2 = fontPx() * 1.3f;
+        drawText("КЛЮЁТ! ЖМИ!", cx + 1, cy - cs * 2.6f + 1, p2, C(0, 0, 0, 160), 1);
+        drawText("КЛЮЁТ! ЖМИ!", cx, cy - cs * 2.6f, p2, C(255, (int)(200 * k + 40), 80, 255), 1);
     }
     drawStatusBars();
     drawHotbar();
@@ -5582,12 +7607,25 @@ static int SDLCALL appEventWatch(void*, SDL_Event* e) {
     return 1;
 }
 
+static void createTextures();
+// перестроить атлас под выбранную детализацию (с учётом предела видеокарты)
+static void applyTextureRes() {
+    int res = g_set.texRes;
+    SDL_RendererInfo info;
+    if (g_ren && SDL_GetRendererInfo(g_ren, &info) == 0 && info.max_texture_width > 0)
+        while (res > 16 && (16 * res > info.max_texture_width || 16 * res > info.max_texture_height)) res /= 2;
+    buildHDAtlas(res);
+    createTextures();
+}
 static void createTextures() {
     if (g_atlasTex) SDL_DestroyTexture(g_atlasTex);
     if (g_fontTex) SDL_DestroyTexture(g_fontTex);
-    g_atlasTex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, ATLAS, ATLAS);
-    SDL_UpdateTexture(g_atlasTex, NULL, g_atlasPx, ATLAS * 4);
+    if ((int)g_hdAtlas.size() != g_hdSize * g_hdSize || g_hdAtlas.empty()) buildHDAtlas(g_tileRes);
+    g_atlasTex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, g_hdSize, g_hdSize);
+    SDL_UpdateTexture(g_atlasTex, NULL, g_hdAtlas.data(), g_hdSize * 4);
     SDL_SetTextureBlendMode(g_atlasTex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(g_atlasTex, g_tileRes > 16 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);   // детальные текстуры — сглаживать, пиксельные — нет
+    g_animFrameW = g_animFrameL = -1;
     g_fontTex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, FONT_TEX_W, FONT_TEX_H);
     SDL_UpdateTexture(g_fontTex, NULL, g_fontPx, FONT_TEX_W * 4);
     SDL_SetTextureBlendMode(g_fontTex, SDL_BLENDMODE_BLEND);
@@ -5902,6 +7940,7 @@ static void updateGame(float dt) {
     if (P.dead && g_screen == SCR_GAME) { g_screen = SCR_DEAD; g_ui.focus = -1; }
     static Rng mobRng(777);
     for (Mob& m : g_mobs) if (!m.dead) updateMob(m, dt, mobRng);
+    updateBobber(dt);
     for (size_t i = 0; i < g_mobs.size();) {
         Mob& m = g_mobs[i];
         double dx = m.x - P.x, dz = m.z - P.z;
@@ -5910,7 +7949,7 @@ static void updateGame(float dt) {
         i++;
     }
     g_spawnT -= dt;
-    if (g_spawnT <= 0) { g_spawnT = 1.5f; spawnMobs(mobRng); }
+    if (g_spawnT <= 0) { g_spawnT = 1.5f; spawnMobs(mobRng); spawnFish(mobRng); }
     updateArrows(dt);
     updateDrops(dt);
     updateParticles(dt);
@@ -5942,6 +7981,7 @@ static void renderWorld() {
     emitMobs();
     emitDrops(g_time);
     emitArrows();
+    emitFishingLine();
     emitParticles();
     emitCrack();
     flushPolys(g_atlasTex);
@@ -6218,7 +8258,7 @@ static void screenSettings() {
     if (g_settingsBack == SCR_MAIN) drawBackdrop(g_time); else fillRect(0, 0, (float)g_W, (float)g_H, C(0, 0, 0, 170));
     float S = uiS();
     drawTitle("НАСТРОЙКИ", (float)insetTop(), 2.2f);
-    float y = insetTop() + S * 11, step = S * 9.f;
+    float y = insetTop() + S * 10, step = S * 8.4f;
     int d;
     char b[32];
     d = 0; settingRow(80, y, "ДАЛЬНОСТЬ ПРОРИСОВКИ", std::to_string(g_set.renderDist) + " ЧАНК.", d); g_set.renderDist = clampi(g_set.renderDist + d, 4, 10); y += step;
@@ -6227,6 +8267,11 @@ static void screenSettings() {
     d = 0; snprintf(b, sizeof(b), "%d%%", g_set.inset); settingRow(86, y, "ОТСТУП ОТ КРАЁВ (ВЫРЕЗ)", b, d); g_set.inset = clampi(g_set.inset + d, 0, 12); y += step;
     d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.uiScale * 100)); settingRow(88, y, "РАЗМЕР ТЕКСТА", b, d); g_set.uiScale = clampf(g_set.uiScale + d * 0.1f, 0.7f, 1.4f); y += step;
     d = 0; settingRow(90, y, "АВТОПРЫЖОК", g_set.autoJump ? "ВКЛ" : "ВЫКЛ", d); if (d) g_set.autoJump = !g_set.autoJump; g_autoJump = g_set.autoJump; y += step;
+    { static const int RES[4] = {16, 32, 64, 128};
+      int ri = 0; for (int i = 0; i < 4; i++) if (RES[i] == g_set.texRes) ri = i;
+      d = 0; settingRow(96, y, "ДЕТАЛИЗАЦИЯ БЛОКОВ", std::to_string(g_set.texRes) + "X" + std::to_string(g_set.texRes), d);
+      if (d) { ri = clampi(ri + d, 0, 3); if (RES[ri] != g_set.texRes) { g_set.texRes = RES[ri]; applyTextureRes(); } }
+      y += step; }
     { static const char* SH[3] = {"ВЫКЛ", "ЛЁГКИЕ", "ПОЛНЫЕ"};
       d = 0; settingRow(94, y, "ШЕЙДЕРЫ", SH[g_set.shaders], d); g_set.shaders = (g_set.shaders + d + 3) % 3; g_shaders = g_set.shaders; y += step; }
     d = 0; settingRow(92, y, "ПОКАЗ FPS", g_set.showFps ? "ВКЛ" : "ВЫКЛ", d); if (d) g_set.showFps = !g_set.showFps; y += step;
@@ -6265,7 +8310,9 @@ int main(int argc, char** argv) {
     SDL_GetRendererOutputSize(g_ren, &g_W, &g_H);
 
     initBlocks(); genAtlas(); initAnimTiles(); genFont(); initLightLUT(); initStars(); initRecipes(); initCreativeItems(); initOffsets();
-    createTextures();
+    migrateOldSaves(); loadSettings();
+    g_tileRes = g_set.texRes;
+    applyTextureRes();
     migrateOldSaves();
     loadSettings();
     g_masterVol = g_set.volume; g_autoJump = g_set.autoJump;
