@@ -1100,7 +1100,9 @@ enum { AUDIO_RATE = 22050, MAX_VOICES = 24 };
 enum Snd {
     SND_STEP0 = 0, SND_DIG0 = 6, SND_BREAK0 = 12,
     SND_PLACE = 18, SND_PICKUP, SND_HIT, SND_HURT, SND_CLICK, SND_SPLASH, SND_TOPTUN, SND_PUKH, SND_GNIL, SND_TEN,
-    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW, SND_COUNT
+    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW,
+    SND_MATVAR,                     // ещё по 2 варианта каждого звука материала (шаги, копание, разрушение)
+    SND_COUNT = SND_MATVAR + 36
 };
 static std::vector<float> g_snd[SND_COUNT];
 struct Voice { int snd; float pos, rate, vol; bool on; };
@@ -1130,7 +1132,15 @@ static void audioCallback(void*, Uint8* stream, int len) {
     }
 }
 
+static u32 g_sndCounter = 0;
 static void playSound(int snd, float vol = 1.f, float pitch = 1.f) {
+    if (snd >= 0 && snd < 18) {   // звуки материалов: случайный из трёх вариантов, без повторов подряд
+        static int last[18] = {0};
+        int v = (int)(hash32(++g_sndCounter * 2654435761u) % 3);
+        if (v == last[snd]) v = (v + 1) % 3;
+        last[snd] = v;
+        if (v > 0) snd = SND_MATVAR + snd * 2 + (v - 1);
+    }
     if (!g_audioDev || snd < 0 || snd >= SND_COUNT || g_snd[snd].empty() || vol <= 0.01f) return;
     SDL_LockAudioDevice(g_audioDev);
     int best = -1; float bestPos = -1;
@@ -1173,20 +1183,115 @@ struct Synth {
     }
 };
 
+// ---- звуки материалов: «зёрна» отфильтрованного шума + удар + резонансы
+struct MatSynth {
+    std::vector<float> b; Rng r;
+    MatSynth(float sec, u32 seed) : b((size_t)(sec * AUDIO_RATE), 0.f), r(seed) {}
+    // короткая вспышка шума через полосовой фильтр (биквад)
+    void grain(float t0, float f, float q, float decay, float amp) {
+        f = clampf(f, 60.f, AUDIO_RATE * 0.45f);
+        float w = 2.f * (float)M_PI * f / AUDIO_RATE, al = sinf(w) / (2.f * q), a0 = 1 + al;
+        float b0 = al / a0, b2 = -al / a0, a1 = -2 * cosf(w) / a0, a2 = (1 - al) / a0;
+        float x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        int s0 = (int)(t0 * AUDIO_RATE), n = (int)(decay * 7.f * AUDIO_RATE);
+        for (int i = 0; i < n && s0 + i < (int)b.size(); i++) {
+            float t = i / (float)AUDIO_RATE;
+            float env = (t < 0.0008f ? t / 0.0008f : 1.f) * expf(-t / decay);
+            float x = r.sf() * env;
+            float y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = x; y2 = y1; y1 = y;
+            b[s0 + i] += y * amp * 3.f;
+        }
+    }
+    // глухой удар/резонанс: синус с падающей частотой и затуханием
+    void thump(float t0, float f0, float f1, float decay, float amp) {
+        int s0 = (int)(t0 * AUDIO_RATE), n = (int)(decay * 6.f * AUDIO_RATE); float ph = 0;
+        for (int i = 0; i < n && s0 + i < (int)b.size(); i++) {
+            float t = i / (float)AUDIO_RATE, f = f1 + (f0 - f1) * expf(-t / (decay * 0.6f));
+            ph += f / AUDIO_RATE;
+            b[s0 + i] += sinf(ph * 6.2831853f) * amp * (t < 0.001f ? t / 0.001f : 1.f) * expf(-t / decay);
+        }
+    }
+    void normalize(float peak) {
+        float m = 1e-6f; for (float v : b) m = std::max(m, fabsf(v));
+        for (float& v : b) v *= peak / m;
+        int fade = std::min((int)b.size(), (int)(0.004f * AUDIO_RATE));   // без щелчка в конце
+        for (int i = 0; i < fade; i++) b[b.size() - 1 - i] *= i / (float)fade;
+    }
+};
+// kind: 0 — шаг, 1 — удар при копании, 2 — разрушение блока
+static std::vector<float> makeMatSound(int kind, int mat, u32 seed) {
+    float len = kind == 0 ? 0.2f : (kind == 1 ? 0.22f : 0.5f);
+    MatSynth s(len, seed * 7919u + kind * 131u + mat * 17u);
+    Rng& r = s.r;
+    auto rf = [&](float a, float b) { return a + (b - a) * r.f(); };
+    switch (mat) {
+        case SM_GRASS: {   // шорох травы и хруст земли
+            int n = kind == 0 ? 12 : (kind == 1 ? 10 : 34); float span = kind == 0 ? 0.09f : (kind == 1 ? 0.07f : 0.3f);
+            for (int i = 0; i < n; i++) { float t = span * powf(r.f(), 1.4f); s.grain(t, rf(1300, 3600), 1.2f, rf(0.004f, 0.011f), rf(0.2f, 0.45f) * (1.f - t / (span * 1.3f))); }
+            for (int i = 0; i < n / 2; i++) s.grain(span * r.f(), rf(350, 900), 1.5f, rf(0.008f, 0.016f), rf(0.2f, 0.35f));
+            s.thump(0, 95, 55, kind == 2 ? 0.05f : 0.025f, kind == 0 ? 0.35f : 0.45f);
+            break;
+        }
+        case SM_SAND: {    // сыпучий шелест
+            int n = kind == 0 ? 22 : (kind == 1 ? 18 : 60); float span = kind == 0 ? 0.13f : (kind == 1 ? 0.1f : 0.38f);
+            for (int i = 0; i < n; i++) { float t = span * r.f(); s.grain(t, rf(2200, 5000), 0.9f, rf(0.006f, 0.016f), rf(0.12f, 0.3f) * (1.f - t / (span * 1.2f))); }
+            s.thump(0, 70, 45, 0.03f, 0.2f);
+            break;
+        }
+        case SM_SNOW: {    // плотный хруст
+            int n = kind == 0 ? 18 : (kind == 1 ? 14 : 45); float span = kind == 0 ? 0.11f : (kind == 1 ? 0.08f : 0.32f);
+            for (int i = 0; i < n; i++) { float t = span * r.f(); s.grain(t, rf(1400, 3200), 2.2f, rf(0.003f, 0.008f), rf(0.25f, 0.5f)); }
+            s.thump(0, 900, 760, 0.012f, 0.06f);   // лёгкий скрип
+            s.thump(0, 80, 50, 0.025f, 0.25f);
+            break;
+        }
+        case SM_WOOD: {    // полый деревянный стук
+            float base = rf(170, 215);
+            int knocks = kind == 2 ? 3 : 1;
+            for (int k = 0; k < knocks; k++) {
+                float t = k * rf(0.06f, 0.1f), a = (kind == 0 ? 0.35f : 0.6f) * (1.f - k * 0.25f);
+                s.thump(t, base * 1.0f, base * 0.97f, 0.045f, a); s.thump(t, base * 2.4f, base * 2.35f, 0.025f, a * 0.55f);
+                s.thump(t, base * 4.1f, base * 4.0f, 0.014f, a * 0.3f);
+                s.grain(t, rf(1600, 2600), 2.f, 0.004f, a * 0.8f);
+            }
+            if (kind == 2) for (int i = 0; i < 16; i++) s.grain(rf(0.02f, 0.35f), rf(2500, 5000), 1.5f, rf(0.003f, 0.008f), rf(0.1f, 0.25f));   // щепки
+            break;
+        }
+        case SM_GLASS: {   // звон
+            if (kind == 0) { s.grain(0, rf(3500, 4500), 3.f, 0.004f, 0.5f); s.thump(0, 110, 80, 0.02f, 0.3f); s.thump(0.002f, rf(3200, 3800), 3500, 0.03f, 0.08f); }
+            else {
+                int n = kind == 1 ? 3 : 26; float span = kind == 1 ? 0.02f : 0.3f;
+                for (int i = 0; i < n; i++) { float t = span * powf(r.f(), 1.6f), f = rf(2600, 7000); s.thump(t, f, f * 0.995f, rf(0.02f, 0.07f), rf(0.08f, 0.2f)); s.grain(t, f, 4.f, 0.003f, 0.15f); }
+                s.grain(0, 2500, 0.7f, 0.012f, 0.7f);
+            }
+            break;
+        }
+        default: {         // камень: щелчок + глухой удар + каменная крошка
+            float click = rf(1600, 2300);
+            float a = kind == 0 ? 0.5f : 0.8f;
+            s.grain(0, click, 3.f, kind == 0 ? 0.003f : 0.005f, a);
+            s.grain(0.001f, click * 0.55f, 2.f, 0.006f, a * 0.6f);
+            s.thump(0, kind == 0 ? 120 : 160, 70, kind == 0 ? 0.02f : 0.035f, kind == 0 ? 0.45f : 0.6f);
+            int n = kind == 0 ? 3 : (kind == 1 ? 6 : 42); float span = kind == 2 ? 0.4f : 0.06f;
+            for (int i = 0; i < n; i++) {   // крошка, сыплется всё реже
+                float t = kind == 2 ? 0.02f + span * powf(r.f(), 1.8f) : rf(0.005f, span);
+                s.grain(t, rf(900, 4200), 1.8f, rf(0.002f, 0.007f), rf(0.12f, 0.35f) * (kind == 2 ? (1.f - t / (span * 1.2f)) : 1.f));
+            }
+            if (kind == 2) { s.grain(0, 1400, 0.7f, 0.02f, 0.9f); s.thump(0, 90, 50, 0.08f, 0.55f); }
+            break;
+        }
+    }
+    s.normalize(kind == 0 ? 0.55f : (kind == 1 ? 0.7f : 0.85f));
+    return s.b;
+}
+
 static void genSounds() {
-    // параметры материалов: lp, hp, длительность
-    const float LP[6] = {0.55f, 0.18f, 0.35f, 0.30f, 0.80f, 0.12f};
-    const float HP[6] = {0.02f, 0.01f, 0.03f, 0.01f, 0.10f, 0.01f};
-    for (int m = 0; m < 6; m++) {
-        { Synth s(0.12f, 10 + m); s.noise(0, 0.12f, 0.55f, LP[m], HP[m], 0.004f, 0.03f); if (m == SM_WOOD) s.tone(0, 0.08f, 180, 120, 0.25f, 0.002f, 0.025f); g_snd[SND_STEP0 + m] = s.b; }
-        { Synth s(0.16f, 20 + m); s.noise(0, 0.16f, 0.75f, LP[m], HP[m], 0.002f, 0.04f);
-          if (m == SM_STONE) s.tone(0, 0.06f, 900, 600, 0.12f, 0.001f, 0.015f);
-          if (m == SM_WOOD) s.tone(0, 0.1f, 240, 160, 0.3f, 0.001f, 0.03f);
-          if (m == SM_GLASS) s.tone(0, 0.1f, 2400, 2000, 0.15f, 0.001f, 0.02f);
-          g_snd[SND_DIG0 + m] = s.b; }
-        { Synth s(0.35f, 30 + m); s.noise(0, 0.35f, 0.9f, LP[m] * 0.8f, HP[m], 0.002f, 0.08f); s.noise(0.05f, 0.3f, 0.4f, LP[m], HP[m], 0.01f, 0.06f);
-          if (m == SM_GLASS) for (int k = 0; k < 5; k++) s.tone(0.02f * k, 0.02f * k + 0.15f, 2000 + k * 450, 1800 + k * 300, 0.12f, 0.001f, 0.05f);
-          g_snd[SND_BREAK0 + m] = s.b; }
+    for (int kind = 0; kind < 3; kind++) for (int m = 0; m < 6; m++) {
+        int base = kind * 6 + m;
+        g_snd[base] = makeMatSound(kind, m, 1);
+        g_snd[SND_MATVAR + base * 2] = makeMatSound(kind, m, 2);
+        g_snd[SND_MATVAR + base * 2 + 1] = makeMatSound(kind, m, 3);
     }
     { Synth s(0.18f, 40); s.tone(0, 0.15f, 140, 70, 0.6f, 0.002f, 0.04f); s.noise(0, 0.1f, 0.4f, 0.3f, 0.01f, 0.001f, 0.025f); g_snd[SND_PLACE] = s.b; }
     { Synth s(0.14f, 41); s.tone(0, 0.12f, 500, 1300, 0.4f, 0.003f, 0.05f); g_snd[SND_PICKUP] = s.b; }
@@ -4004,7 +4109,7 @@ static void lightColorAt(double x, double y, double z, float* out) {
 }
 // коробка с углами в мировых координатах относительно камеры (camSpace=false) или в пространстве камеры
 static void emitBox8(const float (*corner)[3], const int tiles[6], const float col[3], float alpha, bool camSpace, float keyBias = 0.f) {
-    static const int FC[6][4] = {{3, 7, 5, 1}, {6, 2, 0, 4}, {2, 3, 7, 6}, {4, 5, 1, 0}, {7, 6, 4, 5}, {2, 3, 1, 0}};
+    static const int FC[6][4] = {{3, 7, 5, 1}, {6, 2, 0, 4}, {6, 7, 3, 2}, {0, 1, 5, 4}, {7, 6, 4, 5}, {2, 3, 1, 0}};   // обход против часовой снаружи
     static const float U[4] = {0, 16, 16, 0}, V[4] = {0, 0, 16, 16};
     for (int d = 0; d < 6; d++) {
         if (tiles[d] < 0) continue;
@@ -4237,50 +4342,142 @@ static void emitCrack() {
     emitBox8(corner, tiles, col, 0.9f, false, -0.05f);
 }
 // рука и предмет в руке (в пространстве камеры)
+// ---------------------------------------------------------------- рука и предмет в руке (пространство камеры: x вправо, y вверх, z вперёд)
+struct Basis3 { float x[3], y[3], z[3], o[3]; };
+static inline void bApply(const Basis3& B, float lx, float ly, float lz, float* out) {
+    for (int i = 0; i < 3; i++) out[i] = B.o[i] + B.x[i] * lx + B.y[i] * ly + B.z[i] * lz;
+}
+// базис из поворотов: сначала вокруг Z (крен), затем X (наклон), затем Y (поворот)
+static Basis3 bEuler(float yaw, float pitch, float roll, float ox, float oy, float oz) {
+    Basis3 B;
+    float cr = cosf(roll), sr = sinf(roll), cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
+    auto rot = [&](float x, float y, float z, float* o) {
+        float x1 = x * cr - y * sr, y1 = x * sr + y * cr, z1 = z;           // Z
+        float y2 = y1 * cp - z1 * sp, z2 = y1 * sp + z1 * cp, x2 = x1;      // X
+        o[0] = x2 * cy + z2 * sy; o[1] = y2; o[2] = -x2 * sy + z2 * cy;     // Y
+    };
+    rot(1, 0, 0, B.x); rot(0, 1, 0, B.y); rot(0, 0, 1, B.z);
+    B.o[0] = ox; B.o[1] = oy; B.o[2] = oz;
+    return B;
+}
+static void emitBoxB(const Basis3& B, float x0, float y0, float z0, float x1, float y1, float z1, const int tiles[6], const float col[3]) {
+    float c8[8][3];
+    for (int c = 0; c < 8; c++) bApply(B, (c & 1) ? x1 : x0, (c & 2) ? y1 : y0, (c & 4) ? z1 : z0, c8[c]);
+    emitBox8(c8, tiles, col, 1.f, true);
+}
+// объёмный предмет: спрайт 16x16, «выдавленный» на 1 пиксель в глубину, как в Minecraft
+static void emitExtruded(int tile, const Basis3& B, float size, const float col[3]) {
+    const int tx = (tile & 15) * 16, ty = (tile >> 4) * 16;
+    auto opaque = [&](int u, int v) { return u >= 0 && v >= 0 && u < 16 && v < 16 && pA(g_atlasPx[(ty + v) * ATLAS + tx + u]) > 100; };
+    const float k = size / 16.f, t = k * 0.5f;
+    auto P = [&](float u, float v, float d, float* o) { bApply(B, (u - 8.f) * k, (8.f - v) * k, d, o); };
+    float W[4][3], UV[4][2], C[4][4];
+    auto setC = [&](float sh) { for (int i = 0; i < 4; i++) { C[i][0] = col[0] * sh; C[i][1] = col[1] * sh; C[i][2] = col[2] * sh; C[i][3] = 1; } };
+    // лицевая и задняя стороны целиком (прозрачные пиксели атласа не рисуются)
+    for (int side = 0; side < 2; side++) {
+        float d = side ? t : -t;
+        if (!side) { P(0, 0, d, W[0]); P(16, 0, d, W[1]); P(16, 16, d, W[2]); P(0, 16, d, W[3]); tileUV(tile, 0, 0, UV[0]); tileUV(tile, 16, 0, UV[1]); tileUV(tile, 16, 16, UV[2]); tileUV(tile, 0, 16, UV[3]); }
+        else { P(16, 0, d, W[0]); P(0, 0, d, W[1]); P(0, 16, d, W[2]); P(16, 16, d, W[3]); tileUV(tile, 16, 0, UV[0]); tileUV(tile, 0, 0, UV[1]); tileUV(tile, 0, 16, UV[2]); tileUV(tile, 16, 16, UV[3]); }
+        float n[3] = {B.z[0] * (side ? 1.f : -1.f), B.z[1] * (side ? 1.f : -1.f), B.z[2] * (side ? 1.f : -1.f)};
+        if (n[0] * W[0][0] + n[1] * W[0][1] + n[2] * W[0][2] >= 0) continue;   // смотрит от камеры
+        setC(side ? 0.7f : 1.f);
+        emitQuadCam(W, UV, C);
+    }
+    // боковые грани только по краю силуэта
+    for (int v = 0; v < 16; v++) for (int u = 0; u < 16; u++) {
+        if (!opaque(u, v)) continue;
+        const int du[4] = {1, -1, 0, 0}, dv[4] = {0, 0, 1, -1};
+        const float shd[4] = {0.62f, 0.8f, 0.5f, 0.92f};
+        for (int e = 0; e < 4; e++) {
+            if (opaque(u + du[e], v + dv[e])) continue;
+            float u0, v0, u1, v1;
+            if (e == 0) { u0 = u1 = u + 1.f; v0 = (float)v; v1 = v + 1.f; }
+            else if (e == 1) { u0 = u1 = (float)u; v0 = v + 1.f; v1 = (float)v; }
+            else if (e == 2) { v0 = v1 = v + 1.f; u0 = u + 1.f; u1 = (float)u; }
+            else { v0 = v1 = (float)v; u0 = (float)u; u1 = u + 1.f; }
+            P(u0, v0, -t, W[0]); P(u1, v1, -t, W[1]); P(u1, v1, t, W[2]); P(u0, v0, t, W[3]);
+            float e1[3] = {W[1][0] - W[0][0], W[1][1] - W[0][1], W[1][2] - W[0][2]}, e2[3] = {W[3][0] - W[0][0], W[3][1] - W[0][1], W[3][2] - W[0][2]};
+            float nn[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+            float dp = nn[0] * W[0][0] + nn[1] * W[0][1] + nn[2] * W[0][2];
+            if (fabsf(dp) < 1e-7f) continue;
+            if (dp > 0) { std::swap(W[1], W[3]); }
+            for (int i = 0; i < 4; i++) tileUV(tile, u + 0.5f, v + 0.5f, UV[i]);
+            setC(shd[e]);
+            emitQuadCam(W, UV, C);
+        }
+    }
+}
 static void emitHand() {
     if (P.dead) return;
     float col[3]; lightColorAt(P.x, P.y + PL_EYE, P.z, col);
-    float bx = sinf(P.bobPhase) * 0.035f * P.bobAmt, by = -fabsf(cosf(P.bobPhase)) * 0.03f * P.bobAmt;
-    float sw = sinf(P.swing * (float)M_PI);
     const Stack& s = P.inv[P.sel];
-    auto xform = [&](float lx, float ly, float lz, float ox, float oy, float oz, float yaw, float pitch, float* o) {
-        float cp = cosf(pitch), sp = sinf(pitch);
-        float y1 = ly * cp - lz * sp, z1 = ly * sp + lz * cp;
-        float cy = cosf(yaw), sy = sinf(yaw);
-        float x2 = lx * cy + z1 * sy, z2 = -lx * sy + z1 * cy;
-        o[0] = x2 + ox; o[1] = y1 + oy; o[2] = z2 + oz;
-    };
-    if (s.empty()) {
-        float corner[8][3];
-        for (int c = 0; c < 8; c++) {
-            float lx = (c & 1) ? 0.12f : -0.12f, ly = (c & 2) ? 0.12f : -0.12f, lz = (c & 4) ? 0.45f : -0.45f;
-            xform(lx, ly, lz, 0.62f + bx - sw * 0.15f, -0.58f + by + sw * 0.12f, 0.75f + sw * 0.1f, -0.3f - sw * 0.3f, 0.35f - sw * 0.9f, corner[c]);
-        }
-        int tiles[6] = {T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SLEEVE};
-        emitBox8(corner, tiles, col, 1.f, true);
-    } else if (itemIsCubeIcon(s.id)) {
-        float corner[8][3]; float h = 0.17f;
-        for (int c = 0; c < 8; c++) {
-            float lx = (c & 1) ? h : -h, ly = (c & 2) ? h : -h, lz = (c & 4) ? h : -h;
-            xform(lx, ly, lz, 0.52f + bx - sw * 0.12f, -0.42f + by + sw * 0.08f, 0.82f + sw * 0.08f, 0.75f, -0.2f - sw * 0.7f, corner[c]);
-        }
+    float bx = sinf(P.bobPhase) * 0.03f * P.bobAmt, by = -fabsf(cosf(P.bobPhase)) * 0.025f * P.bobAmt;
+    float sw = sinf(P.swing * (float)M_PI), sw2 = sinf(sqrtf(P.swing) * (float)M_PI);
+    bool bow = s.id == I_BOW;
+    float pull = bow ? P.bowCharge : 0.f;
+    // где ладонь: справа снизу; при взмахе уходит к центру и вперёд
+    float hx = 0.46f + bx - sw2 * 0.22f - pull * 0.06f, hy = -0.25f + by + sw2 * 0.10f - sw * 0.05f, hz = 0.74f + sw * 0.12f - pull * 0.08f;
+    if (s.empty()) { hx += 0.04f; hy -= 0.03f; }
+    if (bow) { hx -= 0.08f; hy += 0.03f; }
+    // рука тянется к ладони из-за нижнего правого края экрана
+    {
+        const float back[3] = {0.95f, -0.95f, 0.30f};
+        float d[3] = {hx - back[0], hy - back[1], hz - back[2]}, L = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        for (int i = 0; i < 3; i++) d[i] /= L;
+        float up[3] = {0, 1, 0};
+        float xa[3] = {up[1] * d[2] - up[2] * d[1], up[2] * d[0] - up[0] * d[2], up[0] * d[1] - up[1] * d[0]};
+        float xl = sqrtf(xa[0] * xa[0] + xa[1] * xa[1] + xa[2] * xa[2]); for (int i = 0; i < 3; i++) xa[i] /= xl;
+        float ya[3] = {d[1] * xa[2] - d[2] * xa[1], d[2] * xa[0] - d[0] * xa[2], d[0] * xa[1] - d[1] * xa[0]};
+        Basis3 A; for (int i = 0; i < 3; i++) { A.x[i] = xa[i]; A.y[i] = ya[i]; A.z[i] = d[i]; }
+        // кисть чуть дальше ладони — предмет лежит в ней
+        float handEnd = s.empty() ? 0.0f : -0.06f;
+        A.o[0] = hx + d[0] * handEnd; A.o[1] = hy + d[1] * handEnd - (s.empty() ? 0.f : 0.05f); A.o[2] = hz + d[2] * handEnd;
+        const float W = 0.085f;
+        const int skin[6] = {T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SKIN};
+        const int sleeve[6] = {T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE};
+        emitBoxB(A, -W, -W, -0.36f, W, W, 0.f, skin, col);
+        emitBoxB(A, -W * 1.18f, -W * 1.18f, -L - 0.3f, W * 1.18f, W * 1.18f, -0.34f, sleeve, col);
+    }
+    if (s.empty()) return;
+    if (itemIsCubeIcon(s.id)) {
+        // блок: небольшой кубик в ладони, повёрнут углом к нам
+        Basis3 B = bEuler(0.78f - sw * 0.3f, -0.42f - sw * 0.5f, 0.f, hx - 0.02f, hy + 0.06f, hz + 0.06f);
+        const float h = 0.085f;
         int tiles[6]; for (int k = 0; k < 6; k++) tiles[k] = BD[s.id].tex[k];
         if (s.id == B_FURNACE) tiles[4] = T_FURN_FRONT;
+        if (s.id == B_FURNACE_LIT) tiles[4] = T_FURN_FRONT_LIT;
         if (s.id == B_CHEST) tiles[4] = T_CHEST_FRONT;
-        emitBox8(corner, tiles, col, 1.f, true);
-    } else {
-        float W[4][3]; float h = 0.24f;
-        const float L[4][2] = {{-h, h}, {h, h}, {h, -h}, {-h, -h}};
-        if (s.id == I_BOW) {   // лук держится прямо перед собой и отводится при натяжении
-            float pull = P.bowCharge;
-            for (int k = 0; k < 4; k++) xform(L[k][0] * 0.95f, L[k][1] * 0.95f, 0, 0.44f + bx * 0.5f - pull * 0.12f, -0.27f + by * 0.5f + pull * 0.05f, 0.85f - pull * 0.1f, -0.5f, 0.f, W[k]);
-        } else
-        for (int k = 0; k < 4; k++) xform(L[k][0], L[k][1], 0, 0.5f + bx - sw * 0.1f, -0.36f + by + sw * 0.1f, 0.8f, -0.35f, -0.25f - sw * 1.0f, W[k]);
-        float UV[4][2], C[4][4]; int t = itemTile(s.id);
-        tileUV(t, 0, 0, UV[0]); tileUV(t, 16, 0, UV[1]); tileUV(t, 16, 16, UV[2]); tileUV(t, 0, 16, UV[3]);
-        for (int k = 0; k < 4; k++) { C[k][0] = col[0]; C[k][1] = col[1]; C[k][2] = col[2]; C[k][3] = 1; }
-        emitQuadCam(W, UV, C);
+        emitBoxB(B, -h, -h, -h, h, h, h, tiles, col);
+        return;
     }
+    int t = itemTile(s.id);
+    bool tool = isTool(s.id);
+    if (bow) {
+        // лук стоит вертикально, тетива к нам; при натяжении наклоняется
+        Basis3 B = bEuler(-0.55f, 0.f, -0.3f - pull * 0.1f, hx - 0.02f, hy + 0.16f, hz + 0.08f);
+        emitExtruded(t, B, 0.5f, col);
+        return;
+    }
+    // инструменты и предметы: рукоять в ладони, верх направлен вперёд-вверх
+    float size = tool ? 0.56f : 0.36f;
+    Basis3 B = tool ? bEuler(-0.55f, 0.12f, -0.12f, 0, 0, 0) : bEuler(-0.5f, 0.1f, 0.f, 0, 0, 0);
+    if (tool) for (int i = 0; i < 3; i++) B.x[i] = -B.x[i];   // зеркально: головка смотрит влево, к центру экрана
+    // точка спрайта, которая лежит в ладони: у инструментов — низ рукояти, у прочего — центр
+    float gu = tool ? 4.5f : 8.f, gv = tool ? 11.5f : 9.f;
+    // взмах: поворот вокруг оси «вправо» камеры
+    float swA = sw * 1.1f;
+    Basis3 R = bEuler(0.f, swA, 0.f, 0, 0, 0);
+    Basis3 F;
+    for (int i = 0; i < 3; i++) {   // F = R * B
+        F.x[i] = R.x[i] * B.x[0] + R.y[i] * B.x[1] + R.z[i] * B.x[2];
+        F.y[i] = R.x[i] * B.y[0] + R.y[i] * B.y[1] + R.z[i] * B.y[2];
+        F.z[i] = R.x[i] * B.z[0] + R.y[i] * B.z[1] + R.z[i] * B.z[2];
+    }
+    float k = size / 16.f, gl[3] = {(gu - 8.f) * k, (8.f - gv) * k, 0.f};
+    for (int i = 0; i < 3; i++) F.o[i] = 0;
+    float g[3]; bApply(F, gl[0], gl[1], gl[2], g);
+    F.o[0] = hx - g[0]; F.o[1] = hy + 0.02f - g[1]; F.o[2] = hz + 0.02f - g[2];
+    emitExtruded(t, F, size, col);
 }
 
 // ---------------------------------------------------------------- сохранение
@@ -4753,6 +4950,24 @@ static void returnCraftGrid() {
 }
 static int g_lastPlaced = -1;
 // разложить ингредиенты рецепта в сетку; повторное нажатие добавляет ещё один набор
+// создать предмет по рецепту прямо в сумку (ингредиенты берутся из сумки)
+static bool craftToBag(int ri) {
+    const Recipe& r = g_recipes[ri];
+    int gw = craftGridW();
+    if (r.w > gw || r.h > gw) { showMsg("НУЖЕН ВЕРСТАК"); return false; }
+    bool creative = g_mode == GM_CREATIVE;
+    std::vector<std::pair<int, int>> need; recipeNeeds(r, need);
+    if (!creative) for (auto& n : need) if (countItem(n.first) < n.second) return false;
+    if (!creative) for (auto& n : need) removeItem(n.first, n.second);
+    Stack out = mkStack(r.out, r.cnt);
+    int left = addItem(out);
+    if (left) { out.cnt = (u16)left; spawnDrop(out, P.x, P.y + 1.2, P.z); showMsg("СУМКА ПОЛНА - ПРЕДМЕТ НА ЗЕМЛЕ"); }
+    notePickup(r.out, r.cnt);
+    if (!left) showMsg("+" + std::to_string(r.cnt) + " " + itemName(r.out) + " - В СУМКЕ", 1.6f);
+    playSound(SND_PICKUP, 0.55f, 1.15f);
+    g_ghostRecipe = -1;
+    return true;
+}
 static void placeRecipe(int ri) {
     const Recipe& r = g_recipes[ri];
     int gw = craftGridW();
@@ -4843,7 +5058,7 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
             for (int ri : e.rec) if (recipeState(g_recipes[ri]) == 0) { pick = ri; break; }
             if (pick < 0) for (int ri : e.rec) if (recipeState(g_recipes[ri]) == 1) { pick = ri; break; }
             if (pick < 0) { showMsg("ЭТОТ РЕЦЕПТ ДЕЛАЕТСЯ НА ВЕРСТАКЕ"); playSound(SND_CLICK, 0.4f, 0.6f); }
-            else placeRecipe(pick);
+            else if (!craftToBag(pick)) placeRecipe(pick);   // хватает материалов — сразу в сумку, иначе подсказка в сетке
         }
     }
     y += bs * ROWS + S * 1.5f;
@@ -4885,13 +5100,26 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
 }
 
 // ---------------------------------------------------------------- экран инвентаря
-static void drawCursorStack(float sz) {
+// взятый предмет показывается в отдельной ячейке «В РУКЕ»; касание по ней возвращает его в сумку
+static void drawHandSlot(float x, float y, float w, float sz) {
     if (g_cursor.empty()) return;
-    // рисуется у последнего касания/фокуса
-    static float lx = 0, ly = 0;
-    if (!g_ui.taps.empty()) { lx = (float)g_ui.taps.back().x; ly = (float)g_ui.taps.back().y; }
-    if (g_ui.pad) for (auto& w : g_ui.cur) if (w.id == g_ui.focus) { lx = w.r.x + w.r.w * 0.75f; ly = w.r.y + w.r.h * 0.75f; }
-    drawStack(g_cursor, lx - sz * 0.3f, ly - sz * 0.3f, sz * 0.9f);
+    float px = fontPx() * 0.8f;
+    drawText("В РУКЕ:", x, y, px, C(255, 230, 150));
+    float sy = y + px * 10;
+    bool hit = uiHit(2020, R(x, sy, sz, sz));
+    float pulse = 0.5f + 0.5f * sinf(SDL_GetTicks() * 0.008f);
+    fillRect(x, sy, sz, sz, C(60, 50, 20, 230));
+    frameRect(x - 2, sy - 2, sz + 4, sz + 4, std::max(2.f, sz * 0.06f), C(255, (int)(200 + 55 * pulse), 90));
+    drawStack(g_cursor, x + sz * 0.04f, sy + sz * 0.04f, sz * 0.92f);
+    std::string nm = itemName(g_cursor.id); float npx = px;
+    float tw = w - sz - px * 3; while (textWidth(nm, npx) > tw && npx > 1.1f) npx *= 0.9f;
+    drawText(nm, x + sz + px * 2, sy + sz / 2 - 3.5f * npx, npx, C(240, 240, 240));
+    { std::string h = "НАЖМИ НА ЯЧЕЙКУ, ЧТОБЫ ПОЛОЖИТЬ"; float hp = px * 0.7f; while (textWidth(h, hp) > w && hp > 1.f) hp *= 0.92f;
+      drawText(h, x, sy + sz + px * 2, hp, C(170, 170, 180)); }
+    if (hit) {
+        int l = addItem(g_cursor);
+        if (l) { g_cursor.cnt = (u16)l; showMsg("СУМКА ПОЛНА"); } else { g_cursor.clear(); playSound(SND_CLICK, 0.4f, 1.1f); }
+    }
 }
 static int slotWidget(int id, Stack& s, float x, float y, float sz, bool sel = false, bool canPlace = true) {
     bool alt = false;
@@ -4955,6 +5183,7 @@ static void drawInventoryScreen() {
         by += bh + S;
     }
     if (button(2009, bx, y0 + ph - pad - bh, bw, bh, "ЗАКРЫТЬ")) { closeInventory(); return; }
+    drawHandSlot(bx, y0 + ph - pad - bh - S * 2 - sz - fontPx() * 18, bw, sz);
 
     // верхняя часть
     float topY = gy;
@@ -5032,12 +5261,21 @@ static void drawInventoryScreen() {
         }
         if (hit && res) showTip(res, ox + sz * 0.6f, oy);
         if (hit && res) {
-            if (g_cursor.empty() || (g_cursor.id == res && g_cursor.cnt + cnt <= maxStack(res))) {
-                if (g_cursor.empty()) g_cursor = mkStack(res, cnt); else g_cursor.cnt += cnt;
+            // готовый предмет сразу ложится в сумку; если места нет — остаток в руку
+            Stack out = mkStack(res, cnt);
+            int left = addItem(out);
+            bool ok = left == 0;
+            if (!ok && (g_cursor.empty() || (g_cursor.id == res && g_cursor.cnt + left <= maxStack(res)))) {
+                if (g_cursor.empty()) g_cursor = mkStack(res, left); else g_cursor.cnt += left;
+                ok = true;
+            } else if (!ok && left < cnt) { Stack d = mkStack(res, left); spawnDrop(d, P.x, P.y + 1.2, P.z); ok = true; }
+            if (ok) {
                 for (int i = 0; i < n * n; i++) if (!g_craft[i].empty()) { g_craft[i].cnt--; if (!g_craft[i].cnt) g_craft[i].clear(); }
                 playSound(SND_PICKUP, 0.5f, 1.2f);
+                notePickup(res, cnt);
+                if (left == 0) showMsg("+" + std::to_string(cnt) + " " + itemName(res) + " - В СУМКЕ", 1.6f);
                 g_ghostRecipe = -1;
-            }
+            } else showMsg("СУМКА ПОЛНА");
         }
     } else if (g_invMode == INV_FURNACE) {
         auto it = g_furnaces.find(posKey(g_contX, g_contY, g_contZ));
@@ -5053,7 +5291,19 @@ static void drawInventoryScreen() {
         float ax = fx + sz * 1.4f, ay = fy + sz * 0.9f;
         fillRect(ax, ay, sz * 1.6f, sz * 0.28f, C(30, 30, 30, 220));
         fillRect(ax, ay, sz * 1.6f * (f.cook / SMELT_TIME), sz * 0.28f, C(250, 210, 90));
-        slotWidget(1202, f.out, ax + sz * 1.9f, fy + sz * 0.45f, sz * 1.1f, false, false);
+        {   // готовое из печи нажатием сразу уходит в сумку
+            float ox = ax + sz * 1.9f, oy = fy + sz * 0.45f, os = sz * 1.1f;
+            bool hit = uiHit(1202, R(ox, oy, os, os));
+            slotBg(ox, oy, os, !f.out.empty(), uiFocused(1202));
+            drawStack(f.out, ox + os * 0.04f, oy + os * 0.04f, os * 0.92f);
+            if (hit && !f.out.empty()) {
+                int id = f.out.id, got = f.out.cnt;
+                int left = addItem(f.out);
+                got -= left; f.out.cnt = (u16)left; if (!left) f.out.clear();
+                if (got > 0) { notePickup(id, got); playSound(SND_PICKUP, 0.5f, 1.1f); showTip(id, ox + os / 2, oy); }
+                else showMsg("СУМКА ПОЛНА");
+            }
+        }
         float hpx = px * 0.8f; std::string h1 = "СВЕРХУ - ЧТО ПЛАВИТЬ", h2 = "СНИЗУ - ТОПЛИВО: УГОЛЬ, ДЕРЕВО";
         while (textWidth(h2, hpx) > gx + gridW - ax && hpx > 1.1f) hpx *= 0.9f;
         drawText(h1, ax, fy + sz * 1.75f, hpx, C(190, 190, 190));
@@ -5075,7 +5325,6 @@ static void drawInventoryScreen() {
     // подсказка: имя предмета под фокусом
     if (g_ui.pad) for (auto& w : g_ui.cur) if (w.id == g_ui.focus && w.id >= 1000 && w.id < 1036 && !P.inv[w.id - 1000].empty())
         drawText(itemName(P.inv[w.id - 1000].id), bx, y0 + ph - pad - S * 22, px * 0.9f, C(255, 240, 180));
-    drawCursorStack(sz);
     // название предмета: под фокусом геймпада или после нажатия
     if (g_ui.pad) {
         for (auto& w : g_ui.cur) if (w.id == g_ui.focus) {
