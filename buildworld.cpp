@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <initializer_list>
 #include <tuple>
+#include <thread>
+#include <atomic>
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -58,11 +60,13 @@ static inline u32 hash3i(int x, int y, int z, u32 seed) {
 // ---------------------------------------------------------------- шум Перлина
 struct Noise {
     u8 p[512];
-    void init(u32 seed) {
+    float ox = 0, oy = 0, oz = 0;   // сдвиг по зерну: иначе в точке (0,0) шум всегда равен нулю и место появления у всех миров похоже
+    void init(u32 seed, bool offset = false) {
         Rng r(seed);
         for (int i = 0; i < 256; i++) p[i] = (u8)i;
         for (int i = 255; i > 0; i--) { int j = r.range(i + 1); std::swap(p[i], p[j]); }
         for (int i = 0; i < 256; i++) p[256 + i] = p[i];
+        if (offset) { ox = r.f() * 256.f; oy = r.f() * 256.f; oz = r.f() * 256.f; } else ox = oy = oz = 0;
     }
     static inline float fade(float t) { return t * t * t * (t * (t * 6 - 15) + 10); }
     static inline float grad2(int h, float x, float y) {
@@ -77,6 +81,7 @@ struct Noise {
         return ((hh & 1) ? -u : u) + ((hh & 2) ? -v : v);
     }
     float n2(float x, float y) const {
+        x += ox; y += oy;
         int xi = ifloor(x), yi = ifloor(y);
         float xf = x - xi, yf = y - yi;
         xi &= 255; yi &= 255;
@@ -87,6 +92,7 @@ struct Noise {
         return lerpf(x1, x2, v) * 0.7f;
     }
     float n3(float x, float y, float z) const {
+        x += ox; y += oy; z += oz;
         int xi = ifloor(x), yi = ifloor(y), zi = ifloor(z);
         float xf = x - xi, yf = y - yi, zf = z - zi;
         xi &= 255; yi &= 255; zi &= 255;
@@ -2269,8 +2275,447 @@ static void genFishTiles(int R) {
     paintTileSS(T_ROD_HAND, R, ss, hard, [&](float x, float y, float* o) { rodSample(x, y, o, false); });   // в руке — без лески: настоящая леска тянется к поплавку
 }
 
+// ---------------------------------------------------------------- инструменты: процедурный рисунок любого разрешения
+// рукоять снизу слева, рабочая часть сверху справа; светит сверху слева
+static const u32 TOOL_PAL[5][3] = {{0xb08048, 0x5e3c1c, 0xe0b47c}, {0x8c8c8e, 0x46464a, 0xc8c8ca}, {0xc4c8d0, 0x545c6a, 0xffffff}, {0xf0c040, 0x94640e, 0xfff6c4}, {0x4fdcd8, 0x10747a, 0xeaffff}};
+// c — поперёк детали (-1 освещённая сторона .. 1 теневая), e — расстояние до края, s — вдоль детали
+static C3 toolMatCol(int m, float c, float s, float /*e*/, float x, float y) {
+    C3 b = c3(TOOL_PAL[m][0]), d = c3(TOOL_PAL[m][1]), l = c3(TOOL_PAL[m][2]);
+    c = clampf(c, -1.f, 1.f);
+    C3 col = c < 0 ? cmix(b, l, -c * 0.75f) : cmix(b, d, c * 0.8f);
+    switch (m) {
+        case 0: { float g = fabsf(fmodf(s * 23.f + fbm(x * 2.f, y * 2.f, 8, 2, 13) * 2.f, 1.f) - 0.5f); col = cmul(col, 0.86f + 0.2f * sstep(0.1f, 0.35f, g)); break; }   // волокна дерева
+        case 1: { float n = fbm(x * 3.f, y * 3.f, 12, 3, 21); col = cmul(col, 0.8f + 0.4f * n); if (hv(ifloor(x * 64), ifloor(y * 64), 9) > 0.93f) col = cmul(col, 0.7f); break; }   // зернистый камень
+        case 2: case 3: {   // металл: полированный блик и шлифовка вдоль
+            float sp = expf(-((c + 0.4f) / 0.16f) * ((c + 0.4f) / 0.16f));
+            col = cmix(col, l, sp * 0.75f);
+            col = cmul(col, 0.94f + 0.08f * hv(ifloor(s * 90.f), ifloor(c * 3.f), 5));
+            break;
+        }
+        case 4: {   // алмаз: грани разной яркости и искры
+            int q = ifloor((c + 1.f) * 2.5f + s * 3.f); static const float lv[6] = {1.15f, 0.82f, 1.02f, 0.7f, 0.92f, 1.2f};
+            col = cmul(col, lv[((q % 6) + 6) % 6]);
+            if (hv(ifloor(x * 40), ifloor(y * 40), 77) > 0.94f) col = cmix(col, c3(0xffffff), 0.7f);
+            break;
+        }
+    }
+    return col;
+}
+static float g_toolPx = 1.f / 16;
+static void toolSample(int m, int k, float x, float y, float* out) {
+    out[0] = out[1] = out[2] = out[3] = 0;
+    const float px = g_toolPx, edgeW = std::max(px * 0.7f, 0.018f);
+    C3 col; bool hit = false;
+    auto put = [&](C3 c, float e) { c = cmul(c, 0.5f + 0.5f * sstep(0.f, edgeW, e)); col = c; hit = true; };
+    // отрезок: s — 0..1 вдоль, c — поперёк (со знаком), dist
+    auto seg = [&](float ax, float ay, float bx, float by, float& s, float& c) {
+        float dx = bx - ax, dy = by - ay, L = sqrtf(dx * dx + dy * dy);
+        float ux = dx / L, uy = dy / L;
+        s = ((x - ax) * ux + (y - ay) * uy) / L;
+        c = (x - ax) * uy - (y - ay) * ux;   // >0 — ниже/правее линии
+        return L;
+    };
+    const float Ax = 0.1f, Ay = 0.9f;
+    // ---- рукоять (у меча — обмотанная рукоять, гарда и навершие)
+    float Hx, Hy;
+    switch (k) { case TK_PICK: Hx = 0.66f; Hy = 0.34f; break; case TK_AXE: Hx = 0.7f; Hy = 0.3f; break; case TK_SHOVEL: Hx = 0.64f; Hy = 0.36f; break; default: Hx = 0.3f; Hy = 0.7f; }
+    {
+        float s, c; seg(Ax, Ay, Hx, Hy, s, c);
+        float hw = std::max(k == TK_SWORD ? 0.04f : 0.042f, px * 0.85f);
+        if (s >= -0.03f && s <= 1.04f && fabsf(c) < hw) {
+            float cc = c / hw;
+            C3 w = cmix(cmix(c3(0x8c5c2e), c3(0xbc8a52), sstep(0.2f, -0.9f, cc)), c3(0x4c2e14), sstep(0.2f, 1.f, cc));
+            float g = fabsf(fmodf(s * 9.f + fbm(x * 2.f, y * 2.f, 8, 2, 31) * 1.5f, 1.f) - 0.5f);
+            w = cmul(w, 0.88f + 0.16f * sstep(0.05f, 0.3f, g));
+            float wrapEnd = k == TK_SWORD ? 1.f : 0.32f;
+            if (s < wrapEnd && s > 0.04f) {   // кожаная обмотка
+                C3 lw = cmix(c3(0x5a3a26), c3(0x2e1c10), sstep(-0.6f, 1.f, cc));
+                float band = fmodf(s * (k == TK_SWORD ? 11.f : 14.f) + cc * 0.25f, 1.f);
+                if (band < 0.18f) lw = cmul(lw, 0.55f); else if (band < 0.35f) lw = cmix(lw, c3(0x8a6448), 0.4f);
+                w = lw;
+            }
+            if (s < 0.05f) w = cmul(c3(0x3a2a1e), 1.f - 0.3f * cc);   // торец
+            put(w, std::min(hw - fabsf(c), (s + 0.03f) * 0.5f));
+        }
+        if (k == TK_SWORD) {   // навершие
+            float dx = x - (Ax - 0.005f), dy = y - (Ay + 0.005f), r = std::max(0.055f, px * 1.2f), d = sqrtf(dx * dx + dy * dy);
+            if (d < r) put(toolMatCol(m, (dx + dy) / r * 0.7f, 0.f, r - d, x, y), r - d);
+        }
+    }
+    // ---- рабочая часть
+    float dxh = Hx - Ax, dyh = Hy - Ay, Lh = sqrtf(dxh * dxh + dyh * dyh);
+    float fx = dxh / Lh, fy = dyh / Lh;    // вдоль рукояти (к голове)
+    float nx = -fy, ny = fx;               // поперёк: (0.7, 0.7) — вниз вправо
+    float rx = x - Hx, ry = y - Hy;
+    float w = rx * fx + ry * fy, u = rx * nx + ry * ny;
+    if (k == TK_PICK) {
+        const float L = 0.44f; float uu = u / L;
+        if (fabsf(uu) < 1.f) {
+            float wc = 0.03f - 0.17f * uu * uu;                       // дуга, концы загнуты к рукояти
+            float th = (0.072f - 0.03f * fabsf(uu)) * std::min(1.f, (1.f - fabsf(uu)) / 0.22f + 0.15f);
+            th = std::max(th, px * 1.0f);
+            float dd = w - wc;
+            if (fabsf(dd) < th) put(toolMatCol(m, -dd / th, uu, th - fabsf(dd), x, y), std::min(th - fabsf(dd), (1.f - fabsf(uu)) * L));
+        }
+        if (fabsf(u) < 0.065f && w > -0.07f && w < 0.075f) {   // проушина-крепление
+            C3 bc = m == 0 ? cmix(c3(0xc8b48a), c3(0x6a5a3a), sstep(-0.05f, 0.07f, w)) : cmul(toolMatCol(m, w / 0.07f, 0.f, 1.f, x, y), 0.72f);
+            if (m == 0 && fmodf((w + 0.1f) * 60.f, 1.f) < 0.3f) bc = cmul(bc, 0.7f);   // верёвочная обвязка
+            put(bc, std::min(0.065f - fabsf(u), 0.075f - fabsf(w)));
+        }
+    } else if (k == TK_AXE) {
+        float b = -u;   // лезвие уходит вверх-влево
+        if (b > -0.1f && b < 0.36f) {
+            float hh = b < 0 ? 0.055f : 0.06f + 0.5f * powf(b, 1.45f);
+            float edge = 0.35f - 1.4f * w * w;                        // выпуклая режущая кромка
+            if (fabsf(w) < hh && b < edge) {
+                float e = std::min(hh - fabsf(w), edge - b);
+                C3 cc = toolMatCol(m, w / hh * 0.9f - 0.2f, b, e, x, y);
+                if (edge - b < std::max(0.035f, px * 1.1f) && b > 0.05f) cc = cmix(cc, c3(TOOL_PAL[m][2]), 0.55f);   // заточка
+                if (b < 0.02f && b > -0.1f) cc = cmul(cc, 0.8f);
+                put(cc, e);
+            }
+        }
+        if (fabsf(u) < 0.05f && fabsf(w) < 0.07f) put(cmul(toolMatCol(m, w / 0.07f, 0.f, 1.f, x, y), 0.7f), std::min(0.05f - fabsf(u), 0.07f - fabsf(w)));
+    } else if (k == TK_SHOVEL) {
+        float s0 = 0.02f, len = 0.36f, s = w - s0;
+        if (s > -0.06f && s < 0.0f && fabsf(u) < 0.05f) put(cmul(toolMatCol(m, u / 0.05f, 0.f, 1.f, x, y), 0.72f), 0.05f - fabsf(u));   // втулка
+        if (s >= 0 && s < len) {
+            float sn = s / len;
+            float hw = 0.12f * std::min(1.f, 0.55f + sn * 4.f) * (sn > 0.7f ? sqrtf(std::max(0.f, 1.f - ((sn - 0.7f) / 0.3f) * ((sn - 0.7f) / 0.3f))) : 1.f);
+            hw = std::max(hw, px * 0.6f);
+            if (fabsf(u) < hw) {
+                float cu = u / hw;
+                C3 cc = toolMatCol(m, cu * 0.8f, sn, hw - fabsf(u), x, y);
+                if (fabsf(cu) < 0.12f && sn < 0.75f) cc = cmul(cc, 0.82f);   // рёбрышко по центру
+                put(cc, std::min(hw - fabsf(u), len - s));
+            }
+        }
+    } else {   // меч: гарда и клинок
+        float gl = 0.17f, gt = std::max(0.038f, px * 0.9f);
+        if (fabsf(u) < gl + gt && fabsf(w) < gt) {
+            float ex = std::max(0.f, fabsf(u) - gl), d = sqrtf(ex * ex + w * w);
+            if (d < gt) put(cmul(toolMatCol(m, w / gt, u, gt - d, x, y), m == 0 ? 0.85f : 0.78f), gt - d);
+        }
+        float s, c; float L = seg(Hx, Hy, 0.93f, 0.07f, s, c);
+        if (s > 0.f && s < 1.f) {
+            float bw = std::max(0.062f, px * 1.0f) * (s > 0.82f ? (1.f - s) / 0.18f : 1.f) + (s > 0.82f ? px * 0.3f : 0.f);
+            if (fabsf(c) < bw) {
+                float cc = c / bw;
+                C3 bc = toolMatCol(m, cc, s, bw - fabsf(c), x, y);
+                if (fabsf(cc) < 0.22f && s > 0.05f && s < 0.72f) bc = cmul(bc, 0.78f);        // дол
+                if (fabsf(cc) > 0.7f) bc = cmix(bc, c3(TOOL_PAL[m][2]), 0.35f);               // заточенные кромки
+                put(bc, std::min(bw - fabsf(c), (1.f - s) * L));
+            }
+        }
+    }
+    if (hit) { out[0] = clampf(col.r, 0, 1); out[1] = clampf(col.g, 0, 1); out[2] = clampf(col.b, 0, 1); out[3] = 1; }
+}
+static void genToolTiles(int R) {
+    g_toolPx = 1.f / R;
+    int ss = R <= 16 ? 6 : (R <= 32 ? 4 : 3);
+    for (int m = 0; m < 5; m++) for (int k = 0; k < 4; k++)
+        paintTileSS(T_TOOL0 + m * 4 + k, R, ss, R <= 32, [&](float x, float y, float* o) { toolSample(m, k, x, y, o); });
+}
+
+// ---------------------------------------------------------------- значки предметов и интерфейса: векторные слои с объёмом
+// каждая деталь — поле расстояний (меньше нуля — внутри); свет сверху слева, тёмная обводка по краю
+static inline float sdCircle(float x, float y, float cx, float cy, float r) { return sqrtf((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r; }
+static inline float sdEll(float x, float y, float cx, float cy, float rx, float ry) { float dx = (x - cx) / rx, dy = (y - cy) / ry; return (sqrtf(dx * dx + dy * dy) - 1.f) * std::min(rx, ry); }
+static inline float sdCaps(float x, float y, float ax, float ay, float bx, float by, float r) {
+    float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 > 0 ? clampf(((x - ax) * dx + (y - ay) * dy) / l2, 0.f, 1.f) : 0.f;
+    float qx = ax + dx * t - x, qy = ay + dy * t - y; return sqrtf(qx * qx + qy * qy) - r;
+}
+static inline float sdCaps2(float x, float y, float ax, float ay, float bx, float by, float ra, float rb) {   // конус с разными радиусами
+    float dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 > 0 ? clampf(((x - ax) * dx + (y - ay) * dy) / l2, 0.f, 1.f) : 0.f;
+    float qx = ax + dx * t - x, qy = ay + dy * t - y; return sqrtf(qx * qx + qy * qy) - (ra + (rb - ra) * t);
+}
+static float sdPoly(float x, float y, const float* p, int n) {   // точное расстояние до многоугольника
+    float d = (x - p[0]) * (x - p[0]) + (y - p[1]) * (y - p[1]); float s = 1.f;
+    for (int i = 0, j = n - 1; i < n; j = i, i++) {
+        float ex = p[j * 2] - p[i * 2], ey = p[j * 2 + 1] - p[i * 2 + 1], wx = x - p[i * 2], wy = y - p[i * 2 + 1];
+        float t = clampf((wx * ex + wy * ey) / (ex * ex + ey * ey), 0.f, 1.f);
+        float bx = wx - ex * t, by = wy - ey * t; d = std::min(d, bx * bx + by * by);
+        bool c1 = y >= p[i * 2 + 1], c2 = y < p[j * 2 + 1], c3 = ex * wy > ey * wx;
+        if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) s = -s;
+    }
+    return s * sqrtf(d);
+}
+static inline float sdRBox(float x, float y, float cx, float cy, float hw, float hh, float r, float ang = 0.f) {
+    float dx = x - cx, dy = y - cy;
+    if (ang != 0.f) { float c = cosf(ang), s = sinf(ang), tx = dx * c + dy * s; dy = -dx * s + dy * c; dx = tx; }
+    float qx = fabsf(dx) - hw + r, qy = fabsf(dy) - hh + r;
+    return sqrtf(std::max(qx, 0.f) * std::max(qx, 0.f) + std::max(qy, 0.f) * std::max(qy, 0.f)) + std::min(std::max(qx, qy), 0.f) - r;
+}
+struct IconPaint {
+    float x, y, px; C3 c; float a = 0;
+    // слой: sdf(x, y), цвет col(x, y, t) где t — 0 у края .. 1 в глубине; bevel — ширина скругления
+    template <class S, class Fc> void lay(S sdf, Fc colf, float bevel, float outl = 1.f, float alpha = 1.f) {
+        float d = sdf(x, y);
+        if (d > 0) return;
+        float e = std::max(px * 0.35f, 0.002f);
+        float gx = sdf(x + e, y) - sdf(x - e, y), gy = sdf(x, y + e) - sdf(x, y - e), gl = sqrtf(gx * gx + gy * gy) + 1e-6f;
+        gx /= gl; gy /= gl;
+        float t = clampf(-d / bevel, 0.f, 1.f), rim = powf(1.f - t, 1.6f);
+        float lit = 0.86f + 0.55f * rim * (-0.6f * gx - 0.8f * gy) - 0.12f * rim;   // скос к свету светлее, от света — темнее
+        C3 col = cmul(colf(x, y, t), lit);
+        float ol = std::max(px * 0.85f, 0.014f) * outl;
+        if (outl > 0 && d > -ol) col = cmix(col, cmul(col, 0.32f), 0.85f);
+        c = a > 0 ? cmix(c, col, alpha) : col; a = std::max(a, alpha);
+    }
+    template <class S> void lay(S sdf, C3 col, float bevel, float outl = 1.f, float alpha = 1.f) { lay(sdf, [&](float, float, float) { return col; }, bevel, outl, alpha); }
+};
+static float g_iconPx = 1.f / 16;
+static C3 grad3(C3 a, C3 b, float k) { return cmix(a, b, clampf(k, 0.f, 1.f)); }
+// металлический цвет для слитков и брони: 2 — железо, 3 — золото, 4 — алмаз (палитра инструментов)
+static C3 metalAt(int m, float x, float y, float t) {
+    C3 b = c3(TOOL_PAL[m][0]), d = c3(TOOL_PAL[m][1]), l = c3(TOOL_PAL[m][2]);
+    float k = (x + y) * 0.5f;
+    C3 col = k < 0.5f ? cmix(l, b, k * 2.f) : cmix(b, d, (k - 0.5f) * 1.6f);
+    float band = expf(-((x - y + 0.1f) / 0.07f) * ((x - y + 0.1f) / 0.07f));   // диагональный блик
+    col = cmix(col, l, band * 0.6f * t);
+    if (m == 4) { int q = ifloor((x * 3.f + y * 5.f) * 2.f); static const float lv[5] = {1.1f, 0.85f, 1.f, 0.75f, 1.18f}; col = cmul(col, lv[((q % 5) + 5) % 5]); }
+    return col;
+}
+static void itemSample(int tile, float x, float y, float* out) {
+    IconPaint P2; P2.x = x; P2.y = y; P2.px = g_iconPx; P2.c = c3(0);
+    IconPaint& I = P2;
+    const float px = g_iconPx;
+    auto wood = [&](float xx, float yy, float t) { float g = fabsf(fmodf((xx - yy) * 1.2f + fbm(xx * 2.f, yy * 2.f, 8, 2, 3) * 0.8f, 0.1f) / 0.1f - 0.5f); return cmul(grad3(c3(0xb07a40), c3(0x6e4420), yy * 0.6f + xx * 0.4f), 0.85f + 0.25f * sstep(0.1f, 0.4f, g) + 0.1f * t); };
+    switch (tile) {
+    case T_STICK: {
+        I.lay([&](float a, float b) { return std::min(sdCaps2(a, b, 0.2f, 0.84f, 0.52f, 0.5f, 0.06f, 0.052f), sdCaps2(a, b, 0.52f, 0.5f, 0.82f, 0.16f, 0.052f, 0.045f)); }, wood, 0.06f);
+        I.lay([&](float a, float b) { return sdCaps(a, b, 0.52f, 0.5f, 0.6f, 0.36f, 0.03f); }, c3(0x7a5028), 0.03f, 0.6f);   // сучок
+        break;
+    }
+    case T_COAL: {
+        auto sd = [&](float a, float b) { float ang = atan2f(b - 0.53f, a - 0.5f); float r = 0.31f + 0.04f * sinf(ang * 5.f + 1.f) + 0.025f * sinf(ang * 9.f); return sqrtf((a - 0.5f) * (a - 0.5f) + (b - 0.53f) * (b - 0.53f)) - r; };
+        I.lay(sd, [&](float a, float b, float t) {
+            int f = ifloor((atan2f(b - 0.5f, a - 0.48f) + 3.2f) * 1.6f + t * 2.f);   // грани
+            static const float lv[6] = {1.f, 0.7f, 1.3f, 0.85f, 1.15f, 0.75f};
+            C3 c = cmul(c3(0x2c2c32), lv[f % 6]);
+            if (hv(ifloor(a * 30), ifloor(b * 30), 4) > 0.86f) c = cmix(c, c3(0x9a9aa4), 0.6f);
+            return c; }, 0.12f);
+        break;
+    }
+    case T_IRON_INGOT: case T_GOLD_INGOT: {
+        int m = tile == T_IRON_INGOT ? 2 : 3;
+        const float top[8] = {0.2f, 0.42f, 0.58f, 0.28f, 0.86f, 0.44f, 0.5f, 0.6f};
+        const float front[8] = {0.12f, 0.5f, 0.5f, 0.68f, 0.5f, 0.84f, 0.1f, 0.64f};
+        const float side[8] = {0.5f, 0.68f, 0.92f, 0.5f, 0.92f, 0.66f, 0.5f, 0.84f};
+        I.lay([&](float a, float b) { return sdPoly(a, b, front, 4); }, [&](float a, float b, float) { return cmul(metalAt(m, a, b, 0.5f), 0.8f); }, 0.02f);
+        I.lay([&](float a, float b) { return sdPoly(a, b, side, 4); }, [&](float a, float b, float) { return cmul(metalAt(m, a, b, 0.3f), 0.62f); }, 0.02f);
+        I.lay([&](float a, float b) { return sdPoly(a, b, top, 4); }, [&](float a, float b, float t) { return cmul(metalAt(m, a, b, t), 1.12f); }, 0.03f);
+        break;
+    }
+    case T_DIAMOND: {
+        const float gem[12] = {0.18f, 0.38f, 0.32f, 0.2f, 0.68f, 0.2f, 0.82f, 0.38f, 0.5f, 0.86f, 0.5f, 0.86f};
+        I.lay([&](float a, float b) { return sdPoly(a, b, gem, 5); }, [&](float a, float b, float) {
+            C3 c = c3(0x52e2dc);
+            if (b < 0.38f) c = (a < 0.4f) ? c3(0x9ef6f0) : (a < 0.6f ? c3(0xd8fffc) : c3(0x6ad8d4));       // корона
+            else { float k = (a - 0.5f) / (0.86f - b + 0.01f); c = k < -0.35f ? c3(0x3cc8c4) : (k < 0.05f ? c3(0x22a6a8) : (k < 0.4f ? c3(0x168c90) : c3(0x0e6c72))); }   // павильон
+            if (fabsf(b - 0.38f) < px * 0.6f) c = c3(0xe8ffff);
+            return c; }, 0.02f);
+        float sx = x - 0.34f, sy = y - 0.3f;
+        if ((fabsf(sx) < 0.012f && fabsf(sy) < 0.07f) || (fabsf(sy) < 0.012f && fabsf(sx) < 0.07f)) { I.c = c3(0xffffff); I.a = 1; }   // искра
+        break;
+    }
+    case T_APPLE: {
+        auto body = [&](float a, float b) { return std::min(sdCircle(a, b, 0.4f, 0.58f, 0.27f), sdCircle(a, b, 0.6f, 0.58f, 0.27f)) + 0.0f * a; };
+        I.lay([&](float a, float b) { return sdCaps(a, b, 0.5f, 0.32f, 0.56f, 0.12f, 0.025f); }, c3(0x5a3a1e), 0.02f);
+        I.lay([&](float a, float b) { float d = body(a, b); float notch = sdCircle(a, b, 0.5f, 0.27f, 0.07f); return std::max(d, -notch); }, [&](float a, float b, float t) {
+            C3 c = grad3(c3(0xe8402e), c3(0x8a1414), (b - 0.35f) * 1.6f + (a - 0.3f) * 0.5f);
+            float st = fbm(a * 1.f, b * 4.f, 8, 3, 9); c = cmix(c, c3(0xf0b040), sstep(0.62f, 0.8f, st) * 0.4f);
+            float hl = sdCircle(a, b, 0.36f, 0.46f, 0.07f); if (hl < 0) c = cmix(c, c3(0xffffff), 0.55f * t);
+            return c; }, 0.14f);
+        I.lay([&](float a, float b) { float c = cosf(-0.6f), s = sinf(-0.6f), dx = a - 0.67f, dy = b - 0.2f, u = dx * c - dy * s, v = dx * s + dy * c; return sdEll(u, v, 0, 0, 0.13f, 0.06f); },
+              [&](float a, float b, float) { C3 c = c3(0x4aa838); if (fabsf((a - 0.6f) * 0.55f + (b - 0.24f)) < px * 0.8f) c = c3(0x2e7a24); return c; }, 0.04f);
+        break;
+    }
+    case T_RAWMEAT: case T_COOKED: {
+        bool ck = tile == T_COOKED;
+        auto sd = [&](float a, float b) { float ang = atan2f(b - 0.52f, a - 0.5f); float r = 0.3f + 0.05f * sinf(ang * 2.f + 0.6f) + 0.02f * sinf(ang * 5.f); return sdEll(a, b, 0.5f, 0.52f, r * 1.25f, r * 0.95f); };
+        I.lay(sd, [&](float a, float b, float t) {
+            C3 c = ck ? grad3(c3(0xa8642c), c3(0x5a2a10), b * 0.8f) : grad3(c3(0xe8606a), c3(0xa82838), b * 0.8f);
+            if (t < 0.22f) c = ck ? c3(0x7a4018) : c3(0xf2dcc8);   // жировая кромка
+            float v = fbm(a * 2.f, b * 2.f, 8, 3, 17); if (!ck && fabsf(v - 0.5f) < 0.03f && t > 0.3f) c = cmix(c, c3(0xf6e0e0), 0.8f);   // мраморность
+            if (ck) { float g = fmodf((a + b) * 7.f, 1.f); if (g < 0.16f && t > 0.25f) c = c3(0x3a1a08); }   // решётка
+            float hl = sdEll(a, b, 0.38f, 0.42f, 0.12f, 0.06f); if (hl < 0) c = cmix(c, c3(0xffffff), ck ? 0.3f : 0.4f);
+            return c; }, 0.16f);
+        I.lay([&](float a, float b) { return sdCircle(a, b, 0.66f, 0.6f, 0.06f); }, c3(ck ? 0xd8c8a8 : 0xf4ecde), 0.04f, 0.8f);   // косточка в срезе
+        break;
+    }
+    case T_BONE: {
+        auto sd = [&](float a, float b) {
+            float d = sdCaps(a, b, 0.28f, 0.72f, 0.72f, 0.28f, 0.055f);
+            d = std::min(d, std::min(sdCircle(a, b, 0.2f, 0.72f, 0.075f), sdCircle(a, b, 0.28f, 0.8f, 0.075f)));
+            d = std::min(d, std::min(sdCircle(a, b, 0.8f, 0.28f, 0.075f), sdCircle(a, b, 0.72f, 0.2f, 0.075f)));
+            return d; };
+        I.lay(sd, [&](float a, float b, float t) { return cmul(grad3(c3(0xf6f0dc), c3(0xc8bc98), (a + b) * 0.6f - 0.1f), 0.95f + 0.08f * t); }, 0.07f);
+        break;
+    }
+    case T_BONEMEAL: {
+        auto sd = [&](float a, float b) { float top = 0.52f - 0.2f * expf(-((a - 0.5f) / 0.2f) * ((a - 0.5f) / 0.2f)) + 0.03f * sinf(a * 30.f); return std::max(std::max(top - b, b - 0.82f), fabsf(a - 0.5f) - 0.38f + (b - 0.82f) * 0.3f); };
+        I.lay(sd, [&](float a, float b, float t) { C3 c = grad3(c3(0xffffff), c3(0xb8b8b0), (b - 0.3f) * 1.5f); if (hv(ifloor(a * 40), ifloor(b * 40), 6) > 0.8f) c = cmul(c, 0.82f); return cmul(c, 0.95f + 0.05f * t); }, 0.1f);
+        break;
+    }
+    case T_ROTTEN: {
+        auto sd = [&](float a, float b) { float ang = atan2f(b - 0.52f, a - 0.5f); float r = 0.28f + 0.05f * sinf(ang * 3.f) + 0.03f * sinf(ang * 7.f + 2.f); return sdEll(a, b, 0.5f, 0.52f, r * 1.2f, r); };
+        I.lay(sd, [&](float a, float b, float t) {
+            C3 c = grad3(c3(0x8a7a44), c3(0x5a3a2a), b);
+            float v = fbm(a * 2.f, b * 2.f, 8, 3, 23); c = cmix(c, c3(0x6a8a3a), sstep(0.5f, 0.7f, v) * 0.7f);
+            if (sstep(0.6f, 0.75f, fbm(a * 3.f, b * 3.f, 12, 2, 44)) > 0.5f) c = cmul(c, 0.55f);
+            if (t < 0.2f) c = cmul(c, 0.8f); return c; }, 0.14f);
+        break;
+    }
+    case T_FLUFF: {
+        auto sd = [&](float a, float b) {
+            float d = std::min(sdCircle(a, b, 0.42f, 0.55f, 0.18f), std::min(sdCircle(a, b, 0.6f, 0.45f, 0.17f), sdCircle(a, b, 0.56f, 0.64f, 0.15f)));
+            return d + 0.03f * (fbm(a * 2.f, b * 2.f, 16, 2, 51) - 0.5f) * 2.f; };
+        I.lay(sd, [&](float a, float b, float t) { C3 c = grad3(c3(0xfff8fa), c3(0xe8c8d4), (b - 0.3f) * 1.4f); float f = fabsf(fmodf(atan2f(b - 0.52f, a - 0.52f) * 6.f, 1.f) - 0.5f); return cmul(c, 0.9f + 0.1f * f + 0.06f * t); }, 0.12f, 0.6f);
+        break;
+    }
+    case T_STRING: {
+        auto sd = [&](float a, float b) {
+            float dx = a - 0.48f, dy = b - 0.48f, r = sqrtf(dx * dx + dy * dy), ang = atan2f(dy, dx);
+            float best = 9.f;
+            for (int k = 0; k < 3; k++) { float rr = 0.1f + 0.055f * ((ang + 3.14159f) / 6.2832f + k); if (rr < 0.3f) best = std::min(best, fabsf(r - rr)); }
+            best -= 0.018f;
+            return std::min(best, sdCaps(a, b, 0.62f, 0.66f, 0.84f, 0.88f, 0.018f)); };
+        I.lay(sd, [&](float a, float b, float) { return cmul(c3(0xece8dc), 0.85f + 0.2f * hv(ifloor(a * 60), ifloor(b * 60), 2)); }, 0.02f, 0.7f);
+        break;
+    }
+    case T_BOW: {
+        auto limb = [&](float a, float b) { float dx = a - 0.12f, dy = b - 0.12f; float r = sqrtf(dx * dx + dy * dy); float ang = atan2f(dy, dx); if (ang < 0.f || ang > 1.5708f) return 9.f; return fabsf(r - 0.62f) - 0.045f * (0.6f + 0.4f * sinf(ang * 2.f)); };
+        I.lay([&](float a, float b) { return sdCaps(a, b, 0.74f, 0.14f, 0.14f, 0.74f, 0.008f + px * 0.4f); }, c3(0xe8e4d8), 0.01f, 0.f);   // тетива
+        I.lay(limb, wood, 0.05f);
+        I.lay([&](float a, float b) { return sdCaps(a, b, 0.5f, 0.6f, 0.6f, 0.5f, 0.06f); }, [&](float a, float b, float) { return fmodf((a - b) * 30.f + 5.f, 1.f) < 0.3f ? c3(0x3a2418) : c3(0x6a4630); }, 0.04f);
+        break;
+    }
+    case T_ARROW: {
+        I.lay([&](float a, float b) { return sdCaps(a, b, 0.22f, 0.78f, 0.74f, 0.26f, 0.022f); }, wood, 0.02f);
+        const float head[6] = {0.88f, 0.12f, 0.66f, 0.24f, 0.76f, 0.34f};
+        I.lay([&](float a, float b) { return sdPoly(a, b, head, 3); }, [&](float a, float b, float t) { return metalAt(2, a, b, t); }, 0.03f);
+        for (int s = -1; s <= 1; s += 2) {
+            float f[8] = {0.3f, 0.7f, 0.14f + (s < 0 ? -0.06f : 0.1f), 0.86f + (s < 0 ? -0.1f : 0.06f), 0.1f + (s < 0 ? -0.04f : 0.06f), 0.9f + (s < 0 ? -0.06f : 0.04f), 0.2f, 0.8f};
+            f[2] = s < 0 ? 0.12f : 0.26f; f[3] = s < 0 ? 0.74f : 0.88f; f[4] = s < 0 ? 0.06f : 0.18f; f[5] = s < 0 ? 0.8f : 0.94f;
+            I.lay([&](float a, float b) { return sdPoly(a, b, f, 4); }, [&](float a, float b, float) { return fmodf((a + b) * 40.f, 1.f) < 0.3f ? c3(0xb83a2a) : c3(0xe85a3e); }, 0.02f);
+        }
+        break;
+    }
+    case T_PBOOK: case T_EBOOK: case T_BOOK: {
+        C3 cv = tile == T_EBOOK ? c3(0x6a2c9a) : (tile == T_BOOK ? c3(0x3a7a3a) : c3(0x8a4a24));
+        const float pages[8] = {0.24f, 0.24f, 0.82f, 0.2f, 0.84f, 0.76f, 0.26f, 0.8f};
+        const float cover[8] = {0.16f, 0.22f, 0.76f, 0.16f, 0.78f, 0.74f, 0.18f, 0.8f};
+        I.lay([&](float a, float b) { return sdPoly(a, b, pages, 4); }, [&](float, float b, float) { return fmodf(b * 40.f, 1.f) < 0.35f ? c3(0xd8d0b8) : c3(0xf4ecd6); }, 0.02f);
+        I.lay([&](float a, float b) { return sdPoly(a, b, cover, 4); }, [&](float a, float b, float t) {
+            C3 c = cmul(cv, 0.85f + 0.25f * (1.f - (a + b) * 0.6f) + 0.05f * t);
+            if (a < 0.26f) c = cmul(c, 0.7f);   // корешок
+            if (fabsf(a - 0.26f) < px * 0.7f) c = cmul(c, 0.5f);
+            float fx = a - 0.5f, fy = b - 0.48f;
+            if (tile == T_EBOOK) {   // золотой узор и руна
+                float r = sqrtf(fx * fx + fy * fy);
+                if (fabsf(r - 0.14f) < 0.016f || (fabsf(fx) < 0.014f && fabsf(fy) < 0.1f) || (fabsf(fy) < 0.014f && fabsf(fx) < 0.1f)) c = c3(0xf0c850);
+                if (r < 0.04f) c = c3(0xffe8a0);
+            } else if (tile == T_BOOK) {   // сетка верстака
+                if (fabsf(fx) < 0.12f && fabsf(fy) < 0.12f && (fabsf(fmodf(fx + 0.12f, 0.08f)) < 0.012f || fabsf(fmodf(fy + 0.12f, 0.08f)) < 0.012f)) c = c3(0xd8e8c8);
+            } else if (fabsf(fy + 0.12f) < 0.03f && fabsf(fx) < 0.16f) c = c3(0xd8b060);   // ярлык
+            return c; }, 0.05f);
+        break;
+    }
+    case T_ANVIL_ITEM: {
+        const float an[24] = {0.08f, 0.3f, 0.92f, 0.3f, 0.92f, 0.44f, 0.66f, 0.46f, 0.6f, 0.62f, 0.76f, 0.7f, 0.78f, 0.82f, 0.22f, 0.82f, 0.24f, 0.7f, 0.4f, 0.62f, 0.36f, 0.46f, 0.18f, 0.42f};
+        I.lay([&](float a, float b) { return sdPoly(a, b, an, 12); }, [&](float, float b, float t) { C3 c = grad3(c3(0x6a6e78), c3(0x2e3036), b * 1.2f - 0.1f); if (b < 0.33f) c = c3(0x9aa0aa); return cmul(c, 0.9f + 0.1f * t); }, 0.04f);
+        break;
+    }
+    case T_DOOR_ITEM: {
+        I.lay([&](float a, float b) { return sdRBox(a, b, 0.5f, 0.5f, 0.27f, 0.44f, 0.03f); }, [&](float a, float b, float t) {
+            C3 c = wood(a, b * 0.2f, t); if (fabsf(fmodf(a - 0.23f, 0.135f)) < px * 0.8f) c = cmul(c, 0.6f);   // доски
+            if (fabsf(a - 0.5f) < 0.18f && b > 0.16f && b < 0.42f) { c = grad3(c3(0xb8e0f0), c3(0x5a90b0), (b - 0.16f) * 4.f); if (fabsf(a - 0.5f) < px * 0.8f || fabsf(b - 0.29f) < px * 0.8f) c = c3(0x4a3018); }
+            return c; }, 0.04f);
+        I.lay([&](float a, float b) { return sdCircle(a, b, 0.66f, 0.56f, 0.03f); }, c3(0xd8b040), 0.02f, 0.6f);
+        break;
+    }
+    case T_BED_ITEM: {
+        I.lay([&](float a, float b) { return std::min(sdRBox(a, b, 0.5f, 0.66f, 0.42f, 0.08f, 0.02f), std::min(sdRBox(a, b, 0.12f, 0.6f, 0.04f, 0.2f, 0.02f), sdRBox(a, b, 0.88f, 0.68f, 0.04f, 0.14f, 0.02f))); }, wood, 0.03f);
+        I.lay([&](float a, float b) { return sdRBox(a, b, 0.54f, 0.52f, 0.33f, 0.1f, 0.06f); }, [&](float a, float b, float) { C3 c = grad3(c3(0xe04848), c3(0x8a2028), (b - 0.42f) * 5.f); if (fmodf(a * 12.f, 1.f) < 0.1f) c = cmul(c, 0.85f); return c; }, 0.06f);
+        I.lay([&](float a, float b) { return sdRBox(a, b, 0.27f, 0.42f, 0.11f, 0.06f, 0.05f); }, c3(0xf4f2ec), 0.05f);
+        break;
+    }
+    case T_HEART_F: case T_HEART_H: case T_HEART_E: {
+        auto heart = [&](float a, float b) {   // точная форма сердца (поле расстояний)
+            const float s = 0.74f; float x0 = fabsf((a - 0.5f) / s), y0 = (0.88f - b) / s;
+            float d;
+            if (y0 + x0 > 1.f) d = sqrtf((x0 - 0.25f) * (x0 - 0.25f) + (y0 - 0.75f) * (y0 - 0.75f)) - 0.35355f;
+            else { float m = 0.5f * std::max(x0 + y0, 0.f); float d1 = x0 * x0 + (y0 - 1.f) * (y0 - 1.f), d2 = (x0 - m) * (x0 - m) + (y0 - m) * (y0 - m); d = sqrtf(std::min(d1, d2)) * (x0 - y0 > 0 ? 1.f : -1.f); }
+            return d * s; };
+        I.lay(heart, c3(0x2a1418), 0.05f);   // пустое сердце — тёмная подложка
+        if (tile != T_HEART_E)
+            I.lay([&](float a, float b) { float d = heart(a, b) + 0.06f; return tile == T_HEART_H ? std::max(d, a - 0.5f) : d; }, [&](float a, float b, float t) {
+                C3 c = grad3(c3(0xff5a5a), c3(0xb01020), (b - 0.2f) * 1.4f); if (sdEll(a, b, 0.33f, 0.36f, 0.07f, 0.045f) < 0) c = cmix(c, c3(0xffffff), 0.65f); return cmul(c, 0.95f + 0.1f * t); }, 0.18f, 0.f);
+        break;
+    }
+    case T_FOOD_F: case T_FOOD_H: case T_FOOD_E: {   // окорок на косточке
+        auto meat = [&](float a, float b) { return sdEll(a, b, 0.4f, 0.44f, 0.27f, 0.23f) * 1.f; };
+        auto bone = [&](float a, float b) { return std::min(sdCaps(a, b, 0.55f, 0.6f, 0.78f, 0.82f, 0.05f), std::min(sdCircle(a, b, 0.8f, 0.76f, 0.06f), sdCircle(a, b, 0.74f, 0.86f, 0.06f))); };
+        if (tile == T_FOOD_E) { I.lay([&](float a, float b) { return std::min(meat(a, b), bone(a, b)); }, c3(0x2a2018), 0.05f); break; }
+        I.lay(bone, c3(0xf0e8d0), 0.05f);
+        I.lay([&](float a, float b) { float d = meat(a, b); return tile == T_FOOD_H ? std::max(d, a - 0.4f) : d; }, [&](float a, float b, float t) {
+            C3 c = grad3(c3(0xd8803a), c3(0x8a3a14), (b - 0.2f) * 1.6f); if (sdEll(a, b, 0.3f, 0.34f, 0.08f, 0.05f) < 0) c = cmix(c, c3(0xffffff), 0.45f); return cmul(c, 0.95f + 0.08f * t); }, 0.1f);
+        if (tile == T_FOOD_H) I.lay([&](float a, float b) { return std::max(meat(a, b), 0.4f - a); }, c3(0x2a2018), 0.05f);
+        break;
+    }
+    case T_BUBBLE: {
+        I.lay([&](float a, float b) { return sdCircle(a, b, 0.5f, 0.5f, 0.38f); }, [&](float a, float b, float t) { C3 c = grad3(c3(0x9ad8ff), c3(0x2a70c8), (b - 0.2f)); c = cmix(c, c3(0x0a2a60), (1.f - t) * 0.3f); if (sdCircle(a, b, 0.38f, 0.36f, 0.08f) < 0) c = c3(0xffffff); return c; }, 0.1f);
+        break;
+    }
+    default: {
+        // броня: значки в сумке (части) и на панели здоровья
+        if (tile >= T_ARMOR0 && tile < T_ARMOR0 + 12) {
+            int m = 2 + (tile - T_ARMOR0) / 4, part = (tile - T_ARMOR0) % 4;
+            auto col = [&](float a, float b, float t) { return metalAt(m, a, b, t); };
+            if (part == 0) {   // шлем: купол, козырёк, прорезь
+                I.lay([&](float a, float b) { float d = sdEll(a, b, 0.5f, 0.52f, 0.36f, 0.32f); d = std::max(d, b - 0.74f); return std::max(d, -sdRBox(a, b, 0.5f, 0.66f, 0.2f, 0.1f, 0.02f)); }, col, 0.1f);
+                I.lay([&](float a, float b) { return sdRBox(a, b, 0.5f, 0.44f, 0.37f, 0.04f, 0.02f); }, [&](float a, float b, float t) { return cmul(col(a, b, t), 0.85f); }, 0.03f, 0.7f);
+            } else if (part == 1) {   // нагрудник
+                const float ch[20] = {0.14f, 0.2f, 0.36f, 0.14f, 0.42f, 0.22f, 0.58f, 0.22f, 0.64f, 0.14f, 0.86f, 0.2f, 0.84f, 0.42f, 0.74f, 0.42f, 0.74f, 0.86f, 0.26f, 0.86f};
+                const float ch2[4] = {0.26f, 0.42f, 0.16f, 0.42f};
+                (void)ch2;
+                I.lay([&](float a, float b) { return sdPoly(a, b, ch, 10) * 1.f + std::min(0.f, 0.f * a) ; }, [&](float a, float b, float t) { C3 c = col(a, b, t); if (fabsf(a - 0.5f) < px * 0.7f && b > 0.3f) c = cmul(c, 0.7f); if (fabsf(b - 0.64f) < px * 0.7f) c = cmul(c, 0.75f); return c; }, 0.08f);
+                I.lay([&](float a, float b) { return std::min(sdRBox(a, b, 0.2f, 0.32f, 0.07f, 0.11f, 0.03f), sdRBox(a, b, 0.8f, 0.32f, 0.07f, 0.11f, 0.03f)); }, col, 0.04f);
+            } else if (part == 2) {   // поножи
+                I.lay([&](float a, float b) { return std::min(sdRBox(a, b, 0.5f, 0.2f, 0.3f, 0.07f, 0.02f), std::min(sdRBox(a, b, 0.33f, 0.52f, 0.12f, 0.33f, 0.03f), sdRBox(a, b, 0.67f, 0.52f, 0.12f, 0.33f, 0.03f))); },
+                      [&](float a, float b, float t) { C3 c = col(a, b, t); if (b < 0.27f) c = cmul(c, 0.8f); return c; }, 0.06f);
+            } else {   // ботинки
+                for (int s = 0; s < 2; s++) {
+                    float ox = s ? 0.52f : 0.1f;
+                    I.lay([&](float a, float b) { return std::min(sdRBox(a, b, ox + 0.13f, 0.5f, 0.1f, 0.2f, 0.03f), sdRBox(a, b, ox + 0.18f, 0.74f, 0.17f, 0.08f, 0.04f)); }, col, 0.06f);
+                }
+            }
+        } else if (tile == T_ARMHUD_F || tile == T_ARMHUD_H || tile == T_ARMHUD_E) {
+            auto shield = [&](float a, float b) { const float sh[10] = {0.16f, 0.2f, 0.5f, 0.12f, 0.84f, 0.2f, 0.78f, 0.6f, 0.5f, 0.88f}; return sdPoly(a, b, sh, 5); };
+            if (tile == T_ARMHUD_E) { I.lay(shield, c3(0x22242a), 0.05f); break; }
+            I.lay(shield, c3(0x22242a), 0.05f);
+            I.lay([&](float a, float b) { float d = shield(a, b) + 0.05f; return tile == T_ARMHUD_H ? std::max(d, a - 0.5f) : d; }, [&](float a, float b, float t) { return metalAt(2, a, b, t); }, 0.08f, 0.f);
+        } else return;
+    }
+    }
+    if (I.a > 0) { out[0] = clampf(I.c.r, 0, 1); out[1] = clampf(I.c.g, 0, 1); out[2] = clampf(I.c.b, 0, 1); out[3] = I.a; }
+    else out[0] = out[1] = out[2] = out[3] = 0;
+}
+static void genItemTiles(int R) {
+    g_iconPx = 1.f / R;
+    int ss = R <= 16 ? 6 : (R <= 32 ? 4 : 3);
+    std::vector<int> ts = {T_STICK, T_COAL, T_IRON_INGOT, T_GOLD_INGOT, T_DIAMOND, T_APPLE, T_RAWMEAT, T_COOKED, T_BONE, T_BONEMEAL, T_ROTTEN, T_FLUFF,
+                           T_STRING, T_BOW, T_ARROW, T_PBOOK, T_EBOOK, T_BOOK, T_ANVIL_ITEM, T_DOOR_ITEM, T_BED_ITEM,
+                           T_HEART_F, T_HEART_H, T_HEART_E, T_FOOD_F, T_FOOD_H, T_FOOD_E, T_BUBBLE, T_ARMHUD_F, T_ARMHUD_H, T_ARMHUD_E};
+    for (int i = 0; i < 12; i++) ts.push_back(T_ARMOR0 + i);
+    for (int t : ts) paintTileSS(t, R, ss, R <= 32, [&](float x, float y, float* o) { itemSample(t, x, y, o); });
+}
+
 static void buildHDAtlas(int res) {
     genFishTiles(16);
+    genToolTiles(16);
+    genItemTiles(16);
     g_tileRes = res; g_hdSize = 16 * res;
     g_hdAtlas.assign((size_t)g_hdSize * g_hdSize, 0);
     for (int y = 0; y < g_hdSize; y++) for (int x = 0; x < g_hdSize; x++) g_hdAtlas[(size_t)y * g_hdSize + x] = g_atlasPx[(y * 16 / res) * ATLAS + x * 16 / res];
@@ -2278,6 +2723,8 @@ static void buildHDAtlas(int res) {
         genHDBlocks();
         genHDAnim();
         genFishTiles(res);
+        genToolTiles(res);
+        genItemTiles(res);
         dilateAtlas();
     } else for (int a = 0; a < 3; a++) for (int f = 0; f < 16; f++) g_hdAnim[a][f].clear();
 }
@@ -2371,17 +2818,45 @@ static const GlyphDef GLYPHS[] = {
     {']', {".###.", "...#.", "...#.", "...#.", "...#.", "...#.", ".###."}},
     {'|', {"..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}},
 };
-enum { FONT_TEX_W = 128, FONT_TEX_H = 128, GLYPH_CW = 6, GLYPH_CH = 8 };
-static u32 g_fontPx[FONT_TEX_W * FONT_TEX_H];
+// наш шрифт 5x7 рисуется в крупную текстуру сглаженными скруглёнными штрихами (FONT_S текселей на пиксель глифа)
+enum { FONT_S = 8, GLYPH_CW = 6, GLYPH_CH = 8, FONT_TEX_W = 1024, FONT_TEX_H = 512 };
+static std::vector<u32> g_fontPx;
 static std::unordered_map<u32, int> g_glyphIndex;
 
 static void genFont() {
-    memset(g_fontPx, 0, sizeof(g_fontPx));
+    g_fontPx.assign((size_t)FONT_TEX_W * FONT_TEX_H, 0);
     int n = (int)(sizeof(GLYPHS) / sizeof(GLYPHS[0]));
     for (int i = 0; i < n; i++) {
-        int gx = (i % 21) * GLYPH_CW, gy = (i / 21) * GLYPH_CH;
-        for (int y = 0; y < 7; y++) for (int x = 0; x < 5; x++)
-            if (GLYPHS[i].rows[y][x] == '#') g_fontPx[(gy + y) * FONT_TEX_W + gx + x] = 0xFFFFFFFFu;
+        auto on = [&](int x, int y) { return x >= 0 && y >= 0 && x < 5 && y < 7 && GLYPHS[i].rows[y][x] == '#'; };
+        // скелет: центры пикселей и связи между соседями; диагонали — только если угол не закрыт
+        std::vector<float> segs;
+        for (int y = 0; y < 7; y++) for (int x = 0; x < 5; x++) {
+            if (!on(x, y)) continue;
+            segs.insert(segs.end(), {(float)x, (float)y, (float)x, (float)y});
+            if (on(x + 1, y)) segs.insert(segs.end(), {(float)x, (float)y, x + 1.f, (float)y});
+            if (on(x, y + 1)) segs.insert(segs.end(), {(float)x, (float)y, (float)x, y + 1.f});
+            if (on(x + 1, y + 1) && !on(x + 1, y) && !on(x, y + 1)) segs.insert(segs.end(), {(float)x, (float)y, x + 1.f, y + 1.f});
+            if (on(x - 1, y + 1) && !on(x - 1, y) && !on(x, y + 1)) segs.insert(segs.end(), {(float)x, (float)y, x - 1.f, y + 1.f});
+        }
+        int ox = (i % 21) * GLYPH_CW * FONT_S, oy = (i / 21) * GLYPH_CH * FONT_S;
+        for (int Y = 0; Y < GLYPH_CH * FONT_S; Y++) for (int X = 0; X < GLYPH_CW * FONT_S; X++) {
+            float acc = 0;
+            for (int sy = 0; sy < 2; sy++) for (int sx = 0; sx < 2; sx++) {
+                float gx = (X + 0.25f + sx * 0.5f) / FONT_S - 0.5f, gy = (Y + 0.25f + sy * 0.5f) / FONT_S - 0.5f;
+                float best = 9.f;
+                for (size_t k = 0; k < segs.size(); k += 4) {
+                    float ax = segs[k], ay = segs[k + 1], bx = segs[k + 2], by = segs[k + 3], dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+                    float t = l2 > 0 ? clampf(((gx - ax) * dx + (gy - ay) * dy) / l2, 0.f, 1.f) : 0.f;
+                    float qx = ax + dx * t - gx, qy = ay + dy * t - gy;
+                    // штрих чуть квадратный (норма между круглой и квадратной) — читается как пиксельный, но гладкий
+                    float d = powf(powf(fabsf(qx), 3.f) + powf(fabsf(qy), 3.f), 1.f / 3.f);
+                    best = std::min(best, d);
+                }
+                acc += clampf((0.56f - best) * FONT_S * 0.9f + 0.5f, 0.f, 1.f);
+            }
+            int a = (int)(acc * 0.25f * 255.f + 0.5f);
+            if (a) g_fontPx[(size_t)(oy + Y) * FONT_TEX_W + ox + X] = RGBA(255, 255, 255, a);
+        }
         g_glyphIndex[GLYPHS[i].cp] = i;
     }
     // латиница, совпадающая по начертанию с кириллицей
@@ -2413,7 +2888,7 @@ enum { AUDIO_RATE = 22050, MAX_VOICES = 24 };
 enum Snd {
     SND_STEP0 = 0, SND_DIG0 = 6, SND_BREAK0 = 12,
     SND_PLACE = 18, SND_PICKUP, SND_HIT, SND_HURT, SND_CLICK, SND_SPLASH, SND_TOPTUN, SND_PUKH, SND_GNIL, SND_TEN,
-    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW, SND_ANVIL, SND_ENCH, SND_CAST, SND_BITE, SND_REEL, SND_FLOP,
+    SND_EAT, SND_POOF, SND_FIZZ, SND_SWING, SND_ZOMB, SND_SKEL, SND_SPID, SND_BOW, SND_ANVIL, SND_ENCH, SND_CAST, SND_BITE, SND_REEL, SND_FLOP, SND_BIRD, SND_BIRD2, SND_CRICKET, SND_CAVE, SND_WIND,
     SND_MATVAR,                     // ещё по 2 варианта каждого звука материала (шаги, копание, разрушение)
     SND_COUNT = SND_MATVAR + 36
 };
@@ -2423,9 +2898,144 @@ static Voice g_voices[MAX_VOICES];
 static SDL_AudioDeviceID g_audioDev = 0;
 static float g_masterVol = 0.8f;
 
+static void audioCallback(void*, Uint8* stream, int len);
+// ---------------------------------------------------------------- музыка: спокойные процедурные пьесы (фортепиано, пэд, бас, реверберация)
+// настроение: 0 — день (мажор), 1 — вечер (минор), 2 — ночь/пещеры (медленно, дорийский лад)
+static std::vector<float> g_musicBuf;        // играет сейчас (читает аудиопоток)
+static size_t g_musicPos = 0;
+static float g_musicVol = 0.6f, g_musicFade = 1.f;
+static std::vector<float> g_musicNext;       // готовится в отдельном потоке
+static std::atomic<int> g_musicReady(0);     // 0 — нет, 1 — готовится, 2 — готово
+static std::thread g_musicThread;
+static float g_musicWait = 4.f;              // пауза до следующей пьесы, с
+static int g_musicMood = 0;
+static std::atomic<int> g_underwaterAudio(0);
+static float g_lpState = 0.f, g_lpK = 1.f;
+static void genMusic(int mood, u32 seed, std::vector<float>& out) {
+    Rng r(seed);
+    const float bpm = mood == 2 ? 58.f : (mood == 1 ? 66.f : 74.f);
+    const float beat = 60.f / bpm;
+    const int bars = 16, bpb = 4;
+    const float len = bars * bpb * beat + 6.f;
+    out.assign((size_t)(len * AUDIO_RATE), 0.f);
+    // аккорды: ступени от тоники (полутоны) и тип (0 мажор, 1 минор)
+    static const int PROG[3][4][2] = {{{0, 0}, {7, 0}, {9, 1}, {5, 0}}, {{9, 1}, {5, 0}, {0, 0}, {7, 0}}, {{2, 1}, {9, 1}, {10, 0}, {5, 0}}};
+    const int root = 48 + (int)(seed % 3) * 2;   // до/ре/ми — разные пьесы в разных тональностях
+    auto hz = [](float midi) { return 440.f * powf(2.f, (midi - 69.f) / 12.f); };
+    auto addNote = [&](float t0, float dur, float midi, float amp, int timbre) {
+        float f = hz(midi);
+        int s0 = (int)(t0 * AUDIO_RATE), n = (int)((dur + (timbre == 1 ? 1.5f : 1.2f)) * AUDIO_RATE);
+        float ph1 = 0, ph2 = 0, ph3 = 0, ph4 = 0;
+        float detune = 1.f + (r.f() - 0.5f) * 0.004f;
+        for (int i = 0; i < n && s0 + i < (int)out.size(); i++) {
+            float t = i / (float)AUDIO_RATE, env;
+            float v;
+            if (timbre == 0) {   // фортепиано: быстрая атака, затухание, верхние гармоники гаснут быстрее
+                env = (1.f - expf(-t * 300.f)) * expf(-t * 1.6f) * (t > dur ? expf(-(t - dur) * 6.f) : 1.f);
+                v = sinf(ph1) + 0.45f * sinf(ph2) * expf(-t * 2.5f) + 0.18f * sinf(ph3) * expf(-t * 4.f) + 0.08f * sinf(ph4) * expf(-t * 7.f);
+            } else if (timbre == 1) {   // пэд: медленная атака, мягкий тембр, лёгкое вибрато
+                float a = std::min(1.f, t / 0.9f), rel = t > dur ? expf(-(t - dur) * 2.2f) : 1.f;
+                env = a * a * rel;
+                float vib = 1.f + 0.003f * sinf(t * 5.1f);
+                v = sinf(ph1 * vib) + 0.3f * sinf(ph2 * vib * 1.002f) + 0.12f * sinf(ph3);
+            } else {   // бас: тёплый, с коротким щипком
+                env = (1.f - expf(-t * 120.f)) * expf(-t * 1.1f) * (t > dur ? expf(-(t - dur) * 8.f) : 1.f);
+                v = sinf(ph1) + 0.25f * sinf(ph2);
+            }
+            out[s0 + i] += v * env * amp;
+            float w = 2.f * (float)M_PI * f / AUDIO_RATE;
+            ph1 += w * detune; ph2 += w * 2.f; ph3 += w * 3.f; ph4 += w * 4.01f;
+        }
+    };
+    static const int PENTA[2][5] = {{0, 2, 4, 7, 9}, {0, 3, 5, 7, 10}};
+    int mel = 2;   // индекс в пентатонике (с октавами)
+    for (int bar = 0; bar < bars; bar++) {
+        const int* ch = PROG[mood][bar % 4];
+        float t0 = 3.f + bar * bpb * beat;
+        int cr = root + ch[0];
+        int third = ch[1] ? 3 : 4;
+        // пэд — аккорд на весь такт
+        float padAmp = mood == 2 ? 0.05f : 0.042f;
+        addNote(t0, bpb * beat, (float)(cr), padAmp, 1); addNote(t0, bpb * beat, (float)(cr + third), padAmp, 1); addNote(t0, bpb * beat, (float)(cr + 7), padAmp, 1);
+        // бас — на первую и третью доли
+        addNote(t0, beat * 1.8f, (float)(cr - 12), 0.11f, 2);
+        if (r.range(100) < 60) addNote(t0 + 2 * beat, beat * 1.5f, (float)(cr - 12 + (r.range(2) ? 7 : 0)), 0.08f, 2);
+        // мелодия: случайное блуждание по пентатонике, иногда паузы и восьмые
+        if (bar >= 2 && bar < bars - 1) {
+            int scale = (mood == 0) ? 0 : 1;
+            for (int b = 0; b < bpb; b++) {
+                int roll = r.range(100);
+                if (roll < (mood == 2 ? 45 : 30)) continue;   // пауза
+                int steps = roll < 80 ? 1 : 2;
+                for (int s = 0; s < steps; s++) {
+                    mel += r.range(5) - 2; mel = clampi(mel, 0, 9);
+                    int deg = PENTA[scale][mel % 5] + (mel / 5) * 12;
+                    int key = mood == 1 ? root + 9 - 12 : (mood == 2 ? root + 2 - 12 : root);
+                    float tt = t0 + (b + s * 0.5f) * beat + (r.f() - 0.5f) * 0.02f;
+                    addNote(tt, beat * (steps == 1 ? 0.9f : 0.45f), (float)(key + 12 + deg), 0.15f * (0.8f + r.f() * 0.3f), 0);
+                    if (r.range(100) < 18) addNote(tt, beat * 0.9f, (float)(key + deg), 0.06f, 0);   // октава ниже — глубже звучит
+                }
+            }
+        }
+    }
+    // финальный аккорд
+    { float t0 = 3.f + bars * bpb * beat; addNote(t0, 2.5f, (float)root, 0.05f, 1); addNote(t0, 2.5f, (float)root + 7, 0.05f, 1); addNote(t0, 1.5f, (float)root + 12, 0.1f, 0); }
+    // реверберация: 4 гребенчатых фильтра + 2 всепропускающих (Шрёдер)
+    {
+        std::vector<float> wet(out.size(), 0.f);
+        const int CD[4] = {1116, 1188, 1277, 1356}; const float fb = 0.82f;
+        for (int c = 0; c < 4; c++) {
+            int d = CD[c] * AUDIO_RATE / 44100; std::vector<float> buf(d, 0.f); int p = 0; float lp = 0;
+            for (size_t i = 0; i < out.size(); i++) { float y = buf[p]; lp = y * 0.6f + lp * 0.4f; buf[p] = out[i] + lp * fb; p = (p + 1) % d; wet[i] += y * 0.25f; }
+        }
+        const int AD[2] = {556, 441};
+        for (int a = 0; a < 2; a++) {
+            int d = AD[a] * AUDIO_RATE / 44100; std::vector<float> buf(d, 0.f); int p = 0;
+            for (size_t i = 0; i < wet.size(); i++) { float b = buf[p], y = -wet[i] + b; buf[p] = wet[i] + b * 0.5f; p = (p + 1) % d; wet[i] = y; }
+        }
+        for (size_t i = 0; i < out.size(); i++) out[i] = out[i] * 0.75f + wet[i] * 0.45f;
+    }
+    // нормировка и плавные края
+    float mx = 0; for (float v : out) mx = std::max(mx, fabsf(v));
+    float k = mx > 0 ? 0.55f / mx : 1.f;
+    for (size_t i = 0; i < out.size(); i++) {
+        float t = i / (float)AUDIO_RATE, fade = std::min(1.f, std::min(t / 2.f, (len - t) / 3.f));
+        out[i] *= k * std::max(0.f, fade);
+    }
+}
+static void musicStartGen(int mood) {
+    if (g_musicReady.load() != 0) return;
+    if (g_musicThread.joinable()) g_musicThread.join();
+    g_musicReady = 1; g_musicMood = mood;
+    u32 seed = (u32)SDL_GetTicks() * 2654435761u + (u32)mood;
+    g_musicThread = std::thread([mood, seed]() { genMusic(mood, seed, g_musicNext); g_musicReady = 2; });
+}
+// вызывается каждый кадр: выбирает настроение, запускает следующую пьесу после паузы
+static void updateMusic(float dt, int moodWanted, bool inMenu) {
+    if (!g_audioDev) return;
+    bool playing;
+    SDL_LockAudioDevice(g_audioDev); playing = g_musicPos < g_musicBuf.size(); SDL_UnlockAudioDevice(g_audioDev);
+    if (g_musicReady.load() == 2) {
+        if (g_musicThread.joinable()) g_musicThread.join();
+        SDL_LockAudioDevice(g_audioDev);
+        g_musicBuf.swap(g_musicNext); g_musicPos = 0; g_musicFade = 1.f;
+        SDL_UnlockAudioDevice(g_audioDev);
+        g_musicNext.clear(); g_musicNext.shrink_to_fit();
+        g_musicReady = 0;
+        g_musicWait = (inMenu ? 15.f : 70.f) + (SDL_GetTicks() % 90);   // пауза после пьесы, как в больших играх: музыка не надоедает
+        return;
+    }
+    if (playing || g_musicReady.load() != 0) return;
+    if (!g_musicBuf.empty()) { SDL_LockAudioDevice(g_audioDev); g_musicBuf.clear(); g_musicBuf.shrink_to_fit(); g_musicPos = 0; SDL_UnlockAudioDevice(g_audioDev); }
+    g_musicWait -= dt;
+    if (g_musicWait <= 0 && g_musicVol > 0.01f) musicStartGen(moodWanted);
+}
+static void stopMusicThread() { if (g_musicThread.joinable()) g_musicThread.join(); }
+
 static void audioCallback(void*, Uint8* stream, int len) {
     Sint16* out = (Sint16*)stream;
     int n = len / 2;
+    float lpTarget = g_underwaterAudio.load() ? 0.12f : 1.f;   // под водой — глухой звук (фильтр низких частот)
     for (int i = 0; i < n; i++) {
         float s = 0;
         for (int v = 0; v < MAX_VOICES; v++) {
@@ -2438,6 +3048,9 @@ static void audioCallback(void*, Uint8* stream, int len) {
             s += (b[ip] * (1 - f) + b[ip + 1] * f) * vo.vol;
             vo.pos += vo.rate;
         }
+        if (g_musicPos < g_musicBuf.size()) { s += g_musicBuf[g_musicPos++] * g_musicVol * g_musicFade; }
+        g_lpK += (lpTarget - g_lpK) * 0.0005f;
+        g_lpState += (s - g_lpState) * g_lpK; s = g_lpState;
         s *= g_masterVol;
         s = s / (1.f + fabsf(s) * 0.3f);   // мягкий лимитер
         int iv = (int)(s * 30000.f);
@@ -2636,6 +3249,19 @@ static void genSounds() {
     { MatSynth m(0.45f, 63);   // катушка: трещотка
       for (int i = 0; i < 14; i++) { float t = i * 0.03f; m.grain(t, 3200.f + (i & 1) * 400.f, 3.f, 0.003f, 0.55f); m.thump(t, 900, 700, 0.01f, 0.12f); }
       m.normalize(0.45f); g_snd[SND_REEL] = m.b; }
+    { Synth s(0.6f, 71);   // птица: две-три быстрые трели
+      for (int i = 0; i < 3; i++) { float t = i * 0.16f; s.tone(t, t + 0.11f, 2900.f + i * 250.f, 3800.f + i * 150.f, 0.35f, 0.01f, 0.05f, 0); s.tone(t + 0.05f, t + 0.1f, 4200.f, 3300.f, 0.2f, 0.005f, 0.03f, 0); }
+      g_snd[SND_BIRD] = s.b; }
+    { Synth s(0.8f, 72);   // другая птица: свист вверх-вниз
+      s.tone(0, 0.28f, 2200, 3400, 0.4f, 0.03f, 0.08f, 0); s.tone(0.32f, 0.7f, 3600, 2400, 0.35f, 0.03f, 0.15f, 0); g_snd[SND_BIRD2] = s.b; }
+    { Synth s(1.2f, 73);   // сверчок: пачки быстрых щелчков около 4.5 кГц
+      for (int b = 0; b < 3; b++) for (int i = 0; i < 6; i++) { float t = b * 0.38f + i * 0.028f; s.tone(t, t + 0.018f, 4500, 4450, 0.22f, 0.002f, 0.01f, 0); }
+      g_snd[SND_CRICKET] = s.b; }
+    { Synth s(3.5f, 74);   // пещера: низкий гул и далёкая капель
+      s.noise(0, 3.5f, 0.35f, 0.02f, 0.f, 0.8f, 1.5f); s.tone(0, 3.5f, 55, 48, 0.25f, 0.8f, 1.5f, 0);
+      s.tone(1.6f, 1.75f, 1400, 2200, 0.2f, 0.002f, 0.12f, 0); g_snd[SND_CAVE] = s.b; }
+    { Synth s(3.f, 75);   // ветер: мягкий шум, медленно нарастает и стихает
+      s.noise(0, 3.f, 0.45f, 0.05f, 0.01f, 1.2f, 1.4f); g_snd[SND_WIND] = s.b; }
     { MatSynth m(0.25f, 64);   // рыба бьётся: мокрый шлепок
       m.thump(0, 190, 80, 0.04f, 0.7f); m.grain(0, 1300, 1.2f, 0.02f, 0.6f); m.grain(0.01f, 2600, 2.f, 0.01f, 0.3f);
       m.normalize(0.55f); g_snd[SND_FLOP] = m.b; }
@@ -2706,11 +3332,14 @@ static std::map<i64, Furnace> g_furnaces;
 static std::vector<Grow> g_grow;
 static i64 g_tick = 0;
 
+// версия генератора: 1 — старые миры (без сдвигов, чтобы их несохранённые участки не изменились), 2 — новые
+static int g_genVer = 2;
 static void worldInitNoise(u32 seed) {
     g_seed = seed;
-    nCont.init(seed * 3 + 1); nHill.init(seed * 5 + 2); nMount.init(seed * 7 + 3); nTemp.init(seed * 11 + 4);
-    nHum.init(seed * 13 + 5); nRiver.init(seed * 17 + 6); nCave1.init(seed * 19 + 7); nCave2.init(seed * 23 + 8);
-    nCave3.init(seed * 29 + 9); nLake.init(seed * 31 + 10); nDetail.init(seed * 37 + 11);
+    bool o = g_genVer >= 2;
+    nCont.init(seed * 3 + 1, o); nHill.init(seed * 5 + 2, o); nMount.init(seed * 7 + 3, o); nTemp.init(seed * 11 + 4, o);
+    nHum.init(seed * 13 + 5, o); nRiver.init(seed * 17 + 6, o); nCave1.init(seed * 19 + 7, o); nCave2.init(seed * 23 + 8, o);
+    nCave3.init(seed * 29 + 9, o); nLake.init(seed * 31 + 10, o); nDetail.init(seed * 37 + 11, o);
 }
 
 static Chunk* g_lastChunk = nullptr;
@@ -3673,6 +4302,9 @@ static float g_blockLUT[16];   // свет факелов и лавы: мягч�
 static float g_dayLight = 1.f;          // 0.15..1
 static float g_skyCol[3] = {0.5f, 0.7f, 1.f}, g_zenCol[3] = {0.3f, 0.5f, 0.9f};
 static float g_fogStart = 60, g_fogEnd = 80;
+static float g_shake = 0;   // сила встряски камеры (урон)
+static float g_hazeK = 0.5f;            // сила воздушной дымки вдали (0 — нет)
+static float g_grade[3] = {1, 1, 1};     // цветокоррекция кадра (умножение)
 
 // ---------------------------------------------------------------- «шейдеры»: состояние эффектов
 // 0 — выключены, 1 — лёгкие (цветной свет, свет по направлению солнца, колышущаяся листва и трава,
@@ -3850,6 +4482,7 @@ static void drawSections() {
             float d2 = ccx * ccx + ccy * ccy + ccz * ccz;
             float fa = fogAlpha(d2);
             if (fa <= 0.01f) continue;
+            float haze = g_hazeK > 0 ? powf(smooth01(10.f, g_fogEnd, sqrtf(d2)), 1.25f) * g_hazeK : 0.f;
             if (kind == 3) {
                 // вода: отражение неба по Френелю и солнечный блик
                 for (int k = 0; k < 4; k++) {
@@ -3872,6 +4505,7 @@ static void drawSections() {
                         C[k][i] = std::min(1.f, col + spec * g_fx.sunCol[i]);
                     }
                     C[k][3] = fa * clampf(0.58f + fres * 0.38f + spec * 0.3f, 0, 0.97f);
+                    for (int i = 0; i < 3; i++) C[k][i] = lerpf(C[k][i], g_skyCol[i], haze);
                 }
             } else {
                 float alpha = fa * ((q.flags & 1) ? (q.tile == T_WATER ? 0.72f : 0.85f) : 1.f);
@@ -3884,6 +4518,7 @@ static void drawSections() {
                     float sh = q.shade[k] / 255.f;
                     if (q.flags & 2) { C[k][0] = C[k][1] = C[k][2] = (q.flags & 4) ? 1.f : sh * 1.05f; }
                     else litColorFX(q.sky[k], q.blk[k], sh, dirMul, flick, C[k]);
+                    if (haze > 0) for (int i = 0; i < 3; i++) C[k][i] = lerpf(C[k][i], g_skyCol[i], haze);
                     C[k][3] = alpha;
                 }
             }
@@ -3919,6 +4554,11 @@ static void updateSkyColors(bool underwater) {
     float sunset = clampf(1.f - fabsf(sh) * 4.f, 0, 1) * 0.65f;
     g_skyCol[0] = lerpf(g_skyCol[0], 0.98f, sunset); g_skyCol[1] = lerpf(g_skyCol[1], 0.55f, sunset); g_skyCol[2] = lerpf(g_skyCol[2], 0.30f, sunset);
     if (underwater) { g_skyCol[0] = 0.05f; g_skyCol[1] = 0.18f; g_skyCol[2] = 0.45f * g_dayLight + 0.05f; for (int i = 0; i < 3; i++) g_zenCol[i] = g_skyCol[i]; }
+    g_hazeK = underwater ? 0.f : 0.32f + 0.25f * dl;
+    // цветокоррекция: днём чуть тёплый, на закате — золотой, ночью — холодный лунный
+    const float gDay[3] = {1.f, 0.985f, 0.95f}, gSet[3] = {1.f, 0.9f, 0.78f}, gNight[3] = {0.78f, 0.86f, 1.f};
+    for (int i = 0; i < 3; i++) { float c = lerpf(gNight[i], gDay[i], dl); g_grade[i] = lerpf(c, gSet[i], sunset * 1.2f); }
+    if (underwater) { g_grade[0] = 0.7f; g_grade[1] = 0.92f; g_grade[2] = 1.f; }
 }
 
 static void drawSkyGlow();
@@ -4177,28 +4817,39 @@ static void drawLensFX(double ex, double ey, double ez, bool underwater) {
 }
 
 static void emitClouds(float gameTime) {
-    const float CY = 118.f, CELL = 8.f;
+    // объёмные облака: клетки-«подушки» толщиной 4 блока; рисуются только внешние грани
+    const float CY = 118.f, CELL = 10.f, TH = 4.f;
     float drift = gameTime * 0.6f;
-    int R = (int)((g_renderDist * 16 + 24) / CELL);
+    int R = std::min(14, (int)((g_renderDist * 16 + 24) / CELL));
     int bx = ifloor((g_cam.x + drift) / CELL), bz = ifloor(g_cam.z / CELL);
     float cl = 0.55f + 0.45f * g_dayLight;
+    auto dens = [&](int gx, int gz) { return nDetail.n2(gx * 0.14f, gz * 0.14f) + nDetail.n2(gx * 0.45f + 7, gz * 0.45f) * 0.3f; };
+    auto isCloud = [&](int gx, int gz) { return dens(gx, gz) >= 0.18f; };
+    float camY = (float)g_cam.y;
     for (int dz = -R; dz <= R; dz++) for (int dx = -R; dx <= R; dx++) {
         if (dx * dx + dz * dz > R * R) continue;
         int gx = bx + dx, gz = bz + dz;
-        float n = nDetail.n2(gx * 0.17f, gz * 0.17f) + nDetail.n2(gx * 0.5f + 7, gz * 0.5f) * 0.3f;
+        float n = dens(gx, gz);
         if (n < 0.18f) continue;
-        float x0 = gx * CELL - drift - (float)g_cam.x, z0 = gz * CELL - (float)g_cam.z, y = CY - (float)g_cam.y;
-        float W[4][3] = {{x0, y, z0}, {x0 + CELL, y, z0}, {x0 + CELL, y, z0 + CELL}, {x0, y, z0 + CELL}};
-        float d2 = (x0 + 4) * (x0 + 4) + (z0 + 4) * (z0 + 4) + y * y;
-        float fa = 1.f - smooth01(g_fogEnd * 0.8f, g_fogEnd + 30.f, sqrtf(d2));
+        float x0 = gx * CELL - drift - (float)g_cam.x, z0 = gz * CELL - (float)g_cam.z, y0 = CY - camY, y1 = y0 + TH;
+        float cx = x0 + CELL * 0.5f, cz = z0 + CELL * 0.5f;
+        float d = sqrtf(cx * cx + cz * cz + y0 * y0);
+        float fa = 1.f - smooth01(g_fogEnd * 0.8f, g_fogEnd + 40.f, d);
         if (fa <= 0.01f) continue;
-        float UV[4][2], C[4][4];
-        for (int k = 0; k < 4; k++) {
-            tileUV(T_WHITE, 8, 8, UV[k]);
-            for (int i = 0; i < 3; i++) C[k][i] = g_shaders ? cl * (0.62f + 0.38f * g_fx.sunCol[i]) : cl;
-            C[k][2] *= 1.02f; C[k][3] = 0.78f * fa;
-        }
-        emitQuadRel(W, UV, C);
+        float op = clampf(0.55f + (n - 0.18f) * 1.6f, 0.55f, 0.9f) * fa;   // плотнее в середине облака
+        float base[3]; for (int i = 0; i < 3; i++) base[i] = g_shaders ? cl * (0.62f + 0.38f * g_fx.sunCol[i]) : cl;
+        auto face = [&](float (*W)[3], float sh, float bluish) {
+            float UV[4][2], C[4][4];
+            for (int k = 0; k < 4; k++) { tileUV(T_WHITE, 8, 8, UV[k]); for (int i = 0; i < 3; i++) C[k][i] = std::min(1.f, base[i] * sh * (i == 2 ? 1.f + bluish : 1.f)); C[k][3] = op; }
+            emitQuadRel(W, UV, C);
+        };
+        float x1 = x0 + CELL, z1 = z0 + CELL;
+        if (camY < CY) { float W[4][3] = {{x0, y0, z0}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1}}; face(W, 0.72f, 0.06f); }        // низ — серее
+        if (camY > CY + TH) { float W[4][3] = {{x0, y1, z0}, {x1, y1, z0}, {x1, y1, z1}, {x0, y1, z1}}; face(W, 1.05f, 0.f); }   // верх — самый светлый
+        if (x0 > 0 && !isCloud(gx - 1, gz)) { float W[4][3] = {{x0, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x0, y1, z0}}; face(W, 0.86f, 0.03f); }
+        if (x1 < 0 && !isCloud(gx + 1, gz)) { float W[4][3] = {{x1, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x1, y1, z0}}; face(W, 0.86f, 0.03f); }
+        if (z0 > 0 && !isCloud(gx, gz - 1)) { float W[4][3] = {{x0, y0, z0}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z0}}; face(W, 0.93f, 0.02f); }
+        if (z1 < 0 && !isCloud(gx, gz + 1)) { float W[4][3] = {{x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}}; face(W, 0.93f, 0.02f); }
     }
 }
 
@@ -4553,6 +5204,7 @@ static void playerHurt(float amount, double fromX = 1e9, double fromZ = 0, bool 
         }
     }
     P.health -= amount; P.hurtCd = 0.5f; P.hurtFlash = 0.35f;
+    g_shake = std::min(1.f, g_shake + 0.35f + amount * 0.08f);   // встряска камеры
     playSound(SND_HURT, 0.8f, 0.9f + (SDL_GetTicks() % 20) / 100.f);
     if (fromX < 1e8) {
         float dx = (float)(P.x - fromX), dz = (float)(P.z - fromZ), l = sqrtf(dx * dx + dz * dz) + 0.001f;
@@ -5153,6 +5805,7 @@ static void updatePlayerPhysics(float dt) {
     if (P.dead) return;
     P.hurtCd = std::max(0.f, P.hurtCd - dt);
     P.hurtFlash = std::max(0.f, P.hurtFlash - dt);
+    g_shake = std::max(0.f, g_shake - dt * 2.5f);
     int fx = ifloor(P.x), fz = ifloor(P.z);
     u8 feet = getBlock(fx, ifloor(P.y + 0.1), fz), waist = getBlock(fx, ifloor(P.y + 0.9), fz), head = getBlock(fx, ifloor(P.y + PL_EYE), fz);
     P.inWater = feet == B_WATER || waist == B_WATER;
@@ -5775,7 +6428,10 @@ static void updateDrops(float dt) {
                 int left = addItem(d.s);
                 if (left < d.s.cnt) { playSound(SND_PICKUP, 0.5f, 0.9f + (SDL_GetTicks() % 30) / 100.f); notePickup(d.s.id, d.s.cnt - left); }
                 d.s.cnt = (u16)left;
-            } else if (dist < 3.0 && d.age > 0.6f) { d.vx += (float)(dx / dist) * dt * 10.f; d.vz += (float)(dz / dist) * dt * 10.f; }
+            } else if (dist < 3.2 && d.age > 0.6f) {   // предмет плавно притягивается к игроку, чем ближе — тем сильнее
+                float k = dt * (8.f + (3.2f - (float)dist) * 9.f);
+                d.vx += (float)(dx / dist) * k; d.vz += (float)(dz / dist) * k; d.vy += (float)(dy / dist) * k * 0.8f + dt * 6.f;
+            }
         }
         if (d.s.cnt == 0 || d.age > 300.f || d.y < -20) { g_drops[i] = g_drops.back(); g_drops.pop_back(); continue; }
         i++;
@@ -6261,8 +6917,16 @@ static void emitBoxB(const Basis3& B, float x0, float y0, float z0, float x1, fl
 }
 // объёмный предмет: спрайт 16x16, «выдавленный» на 1 пиксель в глубину, как в Minecraft
 static void emitExtruded(int tile, const Basis3& B, float size, const float col[3]) {
+    // силуэт: при детализации от 32 берём маску 32x32 из HD-атласа — края предмета мельче и ровнее
+    const int N = (g_tileRes >= 32 && (int)g_hdAtlas.size() == g_hdSize * g_hdSize) ? 32 : 16;
+    const float fN = 16.f / N;
     const int tx = (tile & 15) * 16, ty = (tile >> 4) * 16;
-    auto opaque = [&](int u, int v) { return u >= 0 && v >= 0 && u < 16 && v < 16 && pA(g_atlasPx[(ty + v) * ATLAS + tx + u]) > 100; };
+    auto opaque = [&](int u, int v) {
+        if (u < 0 || v < 0 || u >= N || v >= N) return false;
+        if (N == 16) return pA(g_atlasPx[(ty + v) * ATLAS + tx + u]) > 100;
+        int st = g_tileRes / N, hx = (tile & 15) * g_tileRes + u * st + st / 2, hy = (tile >> 4) * g_tileRes + v * st + st / 2;
+        return pA(g_hdAtlas[(size_t)hy * g_hdSize + hx]) > 110;
+    };
     const float k = size / 16.f, t = k * 0.5f;
     auto P = [&](float u, float v, float d, float* o) { bApply(B, (u - 8.f) * k, (8.f - v) * k, d, o); };
     float W[4][3], UV[4][2], C[4][4];
@@ -6278,7 +6942,7 @@ static void emitExtruded(int tile, const Basis3& B, float size, const float col[
         emitQuadCam(W, UV, C);
     }
     // боковые грани только по краю силуэта
-    for (int v = 0; v < 16; v++) for (int u = 0; u < 16; u++) {
+    for (int v = 0; v < N; v++) for (int u = 0; u < N; u++) {
         if (!opaque(u, v)) continue;
         const int du[4] = {1, -1, 0, 0}, dv[4] = {0, 0, 1, -1};
         const float shd[4] = {0.62f, 0.8f, 0.5f, 0.92f};
@@ -6289,13 +6953,14 @@ static void emitExtruded(int tile, const Basis3& B, float size, const float col[
             else if (e == 1) { u0 = u1 = (float)u; v0 = v + 1.f; v1 = (float)v; }
             else if (e == 2) { v0 = v1 = v + 1.f; u0 = u + 1.f; u1 = (float)u; }
             else { v0 = v1 = (float)v; u0 = (float)u; u1 = u + 1.f; }
+            u0 *= fN; u1 *= fN; v0 *= fN; v1 *= fN;
             P(u0, v0, -t, W[0]); P(u1, v1, -t, W[1]); P(u1, v1, t, W[2]); P(u0, v0, t, W[3]);
             float e1[3] = {W[1][0] - W[0][0], W[1][1] - W[0][1], W[1][2] - W[0][2]}, e2[3] = {W[3][0] - W[0][0], W[3][1] - W[0][1], W[3][2] - W[0][2]};
             float nn[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
             float dp = nn[0] * W[0][0] + nn[1] * W[0][1] + nn[2] * W[0][2];
             if (fabsf(dp) < 1e-7f) continue;
             if (dp > 0) { std::swap(W[1], W[3]); }
-            for (int i = 0; i < 4; i++) tileUV(tile, u + 0.5f, v + 0.5f, UV[i]);
+            for (int i = 0; i < 4; i++) tileUV(tile, (u + 0.5f) * fN, (v + 0.5f) * fN, UV[i]);
             setC(shd[e]);
             emitQuadCam(W, UV, C);
         }
@@ -6310,12 +6975,15 @@ static void emitHand() {
     bool bow = s.id == I_BOW;
     float pull = bow ? P.bowCharge : 0.f;
     // где ладонь: справа снизу; при взмахе уходит к центру и вперёд
-    float hx = 0.46f + bx - sw2 * 0.22f - pull * 0.06f, hy = -0.25f + by + sw2 * 0.10f - sw * 0.05f, hz = 0.74f + sw * 0.12f - pull * 0.08f;
+    // ладонь, точка, откуда рука входит в кадр (снизу), поворот инструмента, толщина руки
+    static const float HD[10] = {0.5f, -0.32f, 0.78f, 0.62f, -1.15f, 0.35f, -0.55f, 0.12f, -0.12f, 0.07f};
+    float hx = HD[0] + bx - sw2 * 0.22f - pull * 0.06f, hy = HD[1] + by + sw2 * 0.10f - sw * 0.05f, hz = HD[2] + sw * 0.12f - pull * 0.08f;
     if (s.empty()) { hx += 0.04f; hy -= 0.03f; }
     if (bow) { hx -= 0.08f; hy += 0.03f; }
     // рука тянется к ладони из-за нижнего правого края экрана
+
     {
-        const float back[3] = {0.95f, -0.95f, 0.30f};
+        const float back[3] = {HD[3], HD[4], HD[5]};
         float d[3] = {hx - back[0], hy - back[1], hz - back[2]}, L = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
         for (int i = 0; i < 3; i++) d[i] /= L;
         float up[3] = {0, 1, 0};
@@ -6323,20 +6991,26 @@ static void emitHand() {
         float xl = sqrtf(xa[0] * xa[0] + xa[1] * xa[1] + xa[2] * xa[2]); for (int i = 0; i < 3; i++) xa[i] /= xl;
         float ya[3] = {d[1] * xa[2] - d[2] * xa[1], d[2] * xa[0] - d[0] * xa[2], d[0] * xa[1] - d[1] * xa[0]};
         Basis3 A; for (int i = 0; i < 3; i++) { A.x[i] = xa[i]; A.y[i] = ya[i]; A.z[i] = d[i]; }
-        // кисть чуть дальше ладони — предмет лежит в ней
-        float handEnd = s.empty() ? 0.0f : -0.06f;
-        A.o[0] = hx + d[0] * handEnd; A.o[1] = hy + d[1] * handEnd - (s.empty() ? 0.f : 0.05f); A.o[2] = hz + d[2] * handEnd;
-        const float W = 0.085f;
+        // ладонь ровно там, где лежит предмет: рукоять проходит сквозь сжатый кулак
+        A.o[0] = hx; A.o[1] = hy; A.o[2] = hz;
+        const float W = HD[9];
         const int skin[6] = {T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SKIN, T_SKIN};
         const int sleeve[6] = {T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE, T_SLEEVE};
-        emitBoxB(A, -W, -W, -0.36f, W, W, 0.f, skin, col);
+        if (s.empty()) emitBoxB(A, -W, -W, -0.36f, W, W, 0.f, skin, col);
+        else {
+            emitBoxB(A, -W, -W, -0.36f, W, W, -0.06f, skin, col);   // предплечье
+            float fc[3] = {col[0] * 0.93f, col[1] * 0.9f, col[2] * 0.88f};
+            emitBoxB(A, -W * 1.12f, -W * 1.08f, -0.07f, W * 1.12f, W * 1.12f, 0.06f, skin, fc);   // кулак, чуть шире
+            float kc[3] = {col[0] * 0.8f, col[1] * 0.74f, col[2] * 0.72f};
+            emitBoxB(A, -W * 1.16f, W * 0.55f, 0.035f, W * 1.16f, W * 1.16f, 0.075f, skin, kc);  // согнутые пальцы спереди
+        }
         emitBoxB(A, -W * 1.18f, -W * 1.18f, -L - 0.3f, W * 1.18f, W * 1.18f, -0.34f, sleeve, col);
     }
     if (s.empty()) return;
     if (itemIsCubeIcon(s.id)) {
         // блок: небольшой кубик в ладони, повёрнут углом к нам
-        Basis3 B = bEuler(0.78f - sw * 0.3f, -0.42f - sw * 0.5f, 0.f, hx - 0.02f, hy + 0.06f, hz + 0.06f);
-        const float h = 0.085f;
+        Basis3 B = bEuler(0.78f - sw * 0.3f, -0.42f - sw * 0.5f, 0.f, hx - 0.02f, hy + 0.165f, hz + 0.05f);
+        const float h = 0.075f;
         int tiles[6]; for (int k = 0; k < 6; k++) tiles[k] = BD[s.id].tex[k];
         if (s.id == B_FURNACE) tiles[4] = T_FURN_FRONT;
         if (s.id == B_FURNACE_LIT) tiles[4] = T_FURN_FRONT_LIT;
@@ -6355,11 +7029,11 @@ static void emitHand() {
         return;
     }
     // инструменты и предметы: рукоять в ладони, верх направлен вперёд-вверх
-    float size = tool ? 0.56f : 0.36f;
-    Basis3 B = tool ? bEuler(-0.55f, 0.12f, -0.12f, 0, 0, 0) : bEuler(-0.5f, 0.1f, 0.f, 0, 0, 0);
+    float size = tool ? 0.46f : 0.3f;
+    Basis3 B = tool ? bEuler(HD[6], HD[7], HD[8], 0, 0, 0) : bEuler(-0.5f, 0.1f, 0.f, 0, 0, 0);
     if (tool) for (int i = 0; i < 3; i++) B.x[i] = -B.x[i];   // зеркально: головка смотрит влево, к центру экрана
-    // точка спрайта, которая лежит в ладони: у инструментов — низ рукояти, у прочего — центр
-    float gu = tool ? 4.5f : 8.f, gv = tool ? 11.5f : 9.f;
+    // точка спрайта, которая лежит в кулаке: у инструментов — рукоять чуть выше торца, у прочего — низ предмета
+    float gu = tool ? 4.f : 8.f, gv = tool ? 12.f : 14.f;
     // взмах: поворот вокруг оси «вправо» камеры
     float swA = sw * 1.1f;
     Basis3 R = bEuler(0.f, swA, 0.f, 0, 0, 0);
@@ -6372,7 +7046,8 @@ static void emitHand() {
     float k = size / 16.f, gl[3] = {(gu - 8.f) * k, (8.f - gv) * k, 0.f};
     for (int i = 0; i < 3; i++) F.o[i] = 0;
     float g[3]; bApply(F, gl[0], gl[1], gl[2], g);
-    F.o[0] = hx - g[0]; F.o[1] = hy + 0.02f - g[1]; F.o[2] = hz + 0.02f - g[2];
+    float gp[3] = {hx, hy + (tool ? 0.f : 0.04f), hz + (tool ? 0.f : 0.02f)};
+    F.o[0] = gp[0] - g[0]; F.o[1] = gp[1] - g[1]; F.o[2] = gp[2] - g[2];
     if (s.id == I_ROD) {   // кончик запоминаем для лески
         bApply(F, (14.4f - 8.f) * k, (8.f - 1.3f) * k, 0.f, g_rodTipCam); g_rodTipOK = true;
     }
@@ -6431,6 +7106,7 @@ static WorldInfo readWorldInfo(int slot) {
     WBuf b; b.d.swap(d);
     if (b.r<u32>() != SAVE_MAGIC) return wi;
     b.ver = b.r<u32>();
+    if (b.ver >= 3) b.r<u8>();
     wi.name = b.rstr(); wi.seed = b.r<u32>(); wi.mode = b.r<u8>(); b.r<float>(); wi.playTime = b.r<float>();
     wi.exists = !b.bad;
     return wi;
@@ -6439,7 +7115,7 @@ static WorldInfo readWorldInfo(int slot) {
 static bool saveWorld() {
     for (auto& kv : g_chunks) if (kv.second->modified) { std::vector<u8> v; encodeChunk(kv.second, v); g_savedChunks[kv.first] = v; }
     WBuf b;
-    b.w<u32>(SAVE_MAGIC); b.w<u32>(2);
+    b.w<u32>(SAVE_MAGIC); b.w<u32>(3); b.w<u8>((u8)g_genVer);
     b.wstr(g_worldName); b.w<u32>(g_seed); b.w<u8>((u8)g_mode); b.w<float>(g_dayTime); b.w<float>(g_playTime); b.w<i64>(g_tick);
     b.w<double>(P.x); b.w<double>(P.y); b.w<double>(P.z); b.w<float>(g_cam.yaw); b.w<float>(g_cam.pitch);
     b.w<float>(P.health); b.w<float>(P.hunger); b.w<float>(P.exhaustion); b.w<float>(P.air);
@@ -6474,8 +7150,9 @@ static bool loadWorld(int slot) {
     WBuf b; b.d.swap(d);
     if (b.r<u32>() != SAVE_MAGIC) return false;
     b.ver = b.r<u32>();
+    int genVer = b.ver >= 3 ? b.r<u8>() : 1;
     resetWorldState();
-    g_worldSlot = slot;
+    g_worldSlot = slot; g_genVer = genVer;
     g_worldName = b.rstr(); u32 seed = b.r<u32>(); g_mode = b.r<u8>(); g_dayTime = b.r<float>(); g_playTime = b.r<float>(); g_tick = b.r<i64>();
     worldInitNoise(seed);
     P.x = b.r<double>(); P.y = b.r<double>(); P.z = b.r<double>(); g_cam.yaw = b.r<float>(); g_cam.pitch = b.r<float>();
@@ -6504,7 +7181,7 @@ static bool loadWorld(int slot) {
 static void deleteWorld(int slot) { remove(worldPath(slot).c_str()); }
 
 // ---------------------------------------------------------------- настройки
-struct Settings { int renderDist = 6; float sens = 1.0f; float volume = 0.8f; int inset = 4; bool showFps = false; bool autoJump = true; float uiScale = 1.0f; int shaders = 2; int texRes = 128; };
+struct Settings { int renderDist = 6; float sens = 1.0f; float volume = 0.8f; int inset = 4; bool showFps = false; bool autoJump = true; float uiScale = 1.0f; int shaders = 2; int texRes = 128; float music = 0.6f; };
 static Settings g_set;
 // переезд со старых названий игры: файлы kubomir_* и buildeworld_* переименовываются, чтобы миры не пропали
 static void migrateOldSaves() {
@@ -6522,14 +7199,15 @@ static void migrateOldSaves() {
 static void saveSettings() {
     FILE* f = fopen((g_basePath + "buildworld_settings.cfg").c_str(), "w");
     if (!f) return;
-    fprintf(f, "%d %f %f %d %d %d %f %d %d\n", g_set.renderDist, g_set.sens, g_set.volume, g_set.inset, g_set.showFps ? 1 : 0, g_set.autoJump ? 1 : 0, g_set.uiScale, g_set.shaders, g_set.texRes);
+    fprintf(f, "%d %f %f %d %d %d %f %d %d %f\n", g_set.renderDist, g_set.sens, g_set.volume, g_set.inset, g_set.showFps ? 1 : 0, g_set.autoJump ? 1 : 0, g_set.uiScale, g_set.shaders, g_set.texRes, g_set.music);
     fclose(f);
 }
 static void loadSettings() {
     FILE* f = fopen((g_basePath + "buildworld_settings.cfg").c_str(), "r");
     if (!f) return;
-    int rd = 6, inset = 4, fps = 0, aj = 1, sh = 2, tr = 128; float sens = 1, vol = 0.8f, ui = 1.f;
-    if (fscanf(f, "%d %f %f %d %d %d %f %d %d", &rd, &sens, &vol, &inset, &fps, &aj, &ui, &sh, &tr) >= 4) {
+    int rd = 6, inset = 4, fps = 0, aj = 1, sh = 2, tr = 128; float sens = 1, vol = 0.8f, ui = 1.f, mus = 0.6f;
+    if (fscanf(f, "%d %f %f %d %d %d %f %d %d %f", &rd, &sens, &vol, &inset, &fps, &aj, &ui, &sh, &tr, &mus) >= 4) {
+        g_set.music = clampf(mus, 0.f, 1.f);
         g_set.shaders = clampi(sh, 0, 2);
         g_set.texRes = (tr == 16 || tr == 32 || tr == 64 || tr == 128) ? tr : 128;
         g_set.renderDist = clampi(rd, 4, 10); g_set.sens = clampf(sens, 0.2f, 3.f); g_set.volume = clampf(vol, 0, 1);
@@ -6559,12 +7237,14 @@ static Stack g_anvil[2];   // наковальня: слева предмет, �
 
 static float g_heldNameT = 0;
 
+static float g_frameDt = 1.f / 60;   // длительность кадра для плавных анимаций интерфейса
 static float uiS() { return g_H / 100.f; }                            // 1% высоты экрана
 static float fontPx() { return std::max(2.f, g_H / 240.f) * g_set.uiScale; }
 static int insetX() { return (int)(g_W * g_set.inset / 100.f); }
 static int insetTop() { return (int)(g_H * 0.045f); }
 
 // ---------------------------------------------------------------- текст
+static SDL_Color C(int r, int g, int b, int a = 255) { SDL_Color c; c.r = (Uint8)r; c.g = (Uint8)g; c.b = (Uint8)b; c.a = (Uint8)a; return c; }
 static float textWidth(const std::string& s, float px) {
     const char* p = s.c_str(); int n = 0;
     while (*p) { utf8Next(p); n++; }
@@ -6572,26 +7252,37 @@ static float textWidth(const std::string& s, float px) {
 }
 static void drawText(const std::string& s, float x, float y, float px, SDL_Color col, int align = 0, bool shadow = true) {
     if (align == 1) x -= textWidth(s, px) / 2; else if (align == 2) x -= textWidth(s, px);
-    for (int pass = shadow ? 0 : 1; pass < 2; pass++) {
-        if (pass == 0) { SDL_SetTextureColorMod(g_fontTex, 20, 20, 25); SDL_SetTextureAlphaMod(g_fontTex, (Uint8)(col.a * 0.8f)); }
-        else { SDL_SetTextureColorMod(g_fontTex, col.r, col.g, col.b); SDL_SetTextureAlphaMod(g_fontTex, col.a); }
-        float off = pass == 0 ? std::max(1.f, px * 0.6f) : 0;
+    static std::vector<SDL_Vertex> vb; static std::vector<int> ib;
+    // проходы: мягкая тень (размытая обводка снизу) и сам текст; всё одной пачкой на проход
+    for (int pass = shadow ? 0 : 2; pass < 3; pass++) {
+        vb.clear(); ib.clear();
+        SDL_Color c = col;
+        float ox = 0, oy = 0, grow = 0;
+        if (pass == 0) { c = C(0, 0, 0, (Uint8)(col.a * 0.35f)); ox = px * 0.35f; oy = px * 0.55f; grow = px * 0.45f; }   // широкая полупрозрачная тень
+        else if (pass == 1) { c = C(10, 10, 14, (Uint8)(col.a * 0.75f)); ox = px * 0.3f; oy = px * 0.45f; }             // чёткая тень
         const char* p = s.c_str(); float cx = x;
         while (*p) {
-            u32 c = utf8Next(p);
-            if (c != ' ') {
-                int g = glyphFor(c);
+            u32 ch = utf8Next(p);
+            if (ch != ' ') {
+                int g = glyphFor(ch);
                 if (g >= 0) {
-                    SDL_Rect src = {(g % 21) * GLYPH_CW, (g / 21) * GLYPH_CH, 5, 7};
-                    SDL_Rect dst = {(int)(cx + off), (int)(y + off), (int)ceilf(5 * px), (int)ceilf(7 * px)};
-                    SDL_RenderCopy(g_ren, g_fontTex, &src, &dst);
+                    float u0 = (float)((g % 21) * GLYPH_CW * FONT_S) / FONT_TEX_W, v0 = (float)((g / 21) * GLYPH_CH * FONT_S) / FONT_TEX_H;
+                    float u1 = u0 + (float)(GLYPH_CW * FONT_S) / FONT_TEX_W, v1 = v0 + (float)(GLYPH_CH * FONT_S) / FONT_TEX_H;
+                    float X0 = cx - 0.5f * px + ox - grow, Y0 = y - 0.5f * px + oy - grow, X1 = X0 + 6 * px + 2 * grow, Y1 = Y0 + 8 * px + 2 * grow;
+                    int b = (int)vb.size();
+                    SDL_Vertex v; v.color = c;
+                    v.position.x = X0; v.position.y = Y0; v.tex_coord.x = u0; v.tex_coord.y = v0; vb.push_back(v);
+                    v.position.x = X1; v.tex_coord.x = u1; vb.push_back(v);
+                    v.position.y = Y1; v.tex_coord.y = v1; vb.push_back(v);
+                    v.position.x = X0; v.tex_coord.x = u0; vb.push_back(v);
+                    int q[6] = {b, b + 1, b + 2, b, b + 2, b + 3}; ib.insert(ib.end(), q, q + 6);
                 }
             }
             cx += 6 * px;
         }
+        if (!vb.empty()) SDL_RenderGeometry(g_ren, g_fontTex, vb.data(), (int)vb.size(), ib.data(), (int)ib.size());
     }
 }
-static SDL_Color C(int r, int g, int b, int a = 255) { SDL_Color c; c.r = (Uint8)r; c.g = (Uint8)g; c.b = (Uint8)b; c.a = (Uint8)a; return c; }
 static void fillRect(float x, float y, float w, float h, SDL_Color c) {
     SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(g_ren, c.r, c.g, c.b, c.a);
@@ -6601,7 +7292,62 @@ static void fillRect(float x, float y, float w, float h, SDL_Color c) {
 static void frameRect(float x, float y, float w, float h, float t, SDL_Color c) {
     fillRect(x, y, w, t, c); fillRect(x, y + h - t, w, t, c); fillRect(x, y, t, h, c); fillRect(x + w - t, y, t, h, c);
 }
+// свечение по краям экрана: цвет у края, к центру прозрачнее
+static void drawEdgeGlow(int r, int g, int b, float a) {
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);   // геометрия без текстуры смешивается по режиму рисования
+    float w = g_W * 0.22f, h = g_H * 0.3f;
+    SDL_Color o; o.r = (Uint8)r; o.g = (Uint8)g; o.b = (Uint8)b; o.a = (Uint8)(255 * clampf(a, 0, 1)); SDL_Color z = o; z.a = 0;
+    auto quad = [&](float x0, float y0, float x1, float y1, SDL_Color c0, SDL_Color c1, bool horiz) {
+        SDL_Vertex v[4]; int idx[6] = {0, 1, 2, 0, 2, 3};
+        float X[4] = {x0, x1, x1, x0}, Y[4] = {y0, y0, y1, y1};
+        for (int i = 0; i < 4; i++) { v[i].position.x = X[i]; v[i].position.y = Y[i]; v[i].tex_coord.x = v[i].tex_coord.y = 0;
+            bool first = horiz ? (i == 0 || i == 3) : (i < 2); v[i].color = first ? c0 : c1; }
+        SDL_RenderGeometry(g_ren, NULL, v, 4, idx, 6);
+    };
+    quad(0, 0, w, (float)g_H, o, z, true); quad(g_W - w, 0, (float)g_W, (float)g_H, z, o, true);
+    quad(0, 0, (float)g_W, h, o, z, false); quad(0, g_H - h, (float)g_W, (float)g_H, z, o, false);
+}
+// скруглённый прямоугольник с вертикальным градиентом (верх -> низ)
+static void roundRect(float x, float y, float w, float h, float r, SDL_Color top, SDL_Color bot) {
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    r = std::min(r, std::min(w, h) * 0.5f);
+    const int NC = 5;
+    SDL_Vertex v[4 * (NC + 1) + 1]; int idx[4 * (NC + 1) * 3];
+    int n = 0;
+    auto colAt = [&](float py) { float k = h > 0 ? clampf((py - y) / h, 0.f, 1.f) : 0.f; SDL_Color c;
+        c.r = (Uint8)(top.r + (bot.r - top.r) * k); c.g = (Uint8)(top.g + (bot.g - top.g) * k); c.b = (Uint8)(top.b + (bot.b - top.b) * k); c.a = (Uint8)(top.a + (bot.a - top.a) * k); return c; };
+    v[n].position.x = x + w / 2; v[n].position.y = y + h / 2; v[n].color = colAt(y + h / 2); v[n].tex_coord.x = v[n].tex_coord.y = 0; n++;
+    const float cxs[4] = {x + w - r, x + r, x + r, x + w - r}, cys[4] = {y + r, y + r, y + h - r, y + h - r};
+    for (int c = 0; c < 4; c++) for (int i = 0; i <= NC; i++) {
+        float a = (c * 90.f + i * 90.f / NC) * 3.14159265f / 180.f;   // 0° вправо, против часовой в экранных координатах (y вниз -> минус)
+        float px = cxs[c] + cosf(a) * r, py = cys[c] - sinf(a) * r;
+        v[n].position.x = px; v[n].position.y = py; v[n].color = colAt(py); v[n].tex_coord.x = v[n].tex_coord.y = 0; n++;
+    }
+    int m = n - 1, k = 0;
+    for (int i = 0; i < m; i++) { idx[k++] = 0; idx[k++] = 1 + i; idx[k++] = 1 + (i + 1) % m; }
+    SDL_RenderGeometry(g_ren, NULL, v, n, idx, k);
+}
+// скруглённая рамка толщиной t
+static void roundFrame(float x, float y, float w, float h, float r, float t, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    r = std::min(r, std::min(w, h) * 0.5f);
+    const int NC = 5, M = 4 * (NC + 1);
+    SDL_Vertex v[M * 2]; int idx[M * 6]; int k = 0;
+    const float cxs[4] = {x + w - r, x + r, x + r, x + w - r}, cys[4] = {y + r, y + r, y + h - r, y + h - r};
+    for (int cc = 0; cc < 4; cc++) for (int i = 0; i <= NC; i++) {
+        float a = (cc * 90.f + i * 90.f / NC) * 3.14159265f / 180.f, ca = cosf(a), sa = sinf(a);
+        int j = cc * (NC + 1) + i;
+        v[j * 2].position.x = cxs[cc] + ca * r; v[j * 2].position.y = cys[cc] - sa * r;
+        float ri = std::max(0.f, r - t);
+        v[j * 2 + 1].position.x = cxs[cc] + ca * ri; v[j * 2 + 1].position.y = cys[cc] - sa * ri;
+        if (r < t) { v[j * 2 + 1].position.x += (ca > 0 ? -1 : 1) * (t - r) * fabsf(ca); v[j * 2 + 1].position.y += (sa > 0 ? 1 : -1) * (t - r) * fabsf(sa); }
+        for (int q = 0; q < 2; q++) { v[j * 2 + q].color = c; v[j * 2 + q].tex_coord.x = v[j * 2 + q].tex_coord.y = 0; }
+    }
+    for (int j = 0; j < M; j++) { int a = j * 2, b = ((j + 1) % M) * 2; int q[6] = {a, b, a + 1, b, b + 1, a + 1}; for (int z = 0; z < 6; z++) idx[k++] = q[z]; }
+    SDL_RenderGeometry(g_ren, NULL, v, M * 2, idx, k);
+}
 static void fillCircle(float cx, float cy, float r, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     const int N = 28; SDL_Vertex v[N + 1]; int idx[N * 3];
     v[0].position.x = cx; v[0].position.y = cy; v[0].color = c; v[0].tex_coord.x = v[0].tex_coord.y = 0;
     for (int i = 0; i < N; i++) {
@@ -6612,6 +7358,7 @@ static void fillCircle(float cx, float cy, float r, SDL_Color c) {
     SDL_RenderGeometry(g_ren, NULL, v, N + 1, idx, N * 3);
 }
 static void ringCircle(float cx, float cy, float r, float t, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
     const int N = 32; SDL_Vertex v[N * 2]; int idx[N * 6];
     for (int i = 0; i < N; i++) {
         float a = i * 6.2831853f / N;
@@ -6744,25 +7491,39 @@ static bool button(int id, float x, float y, float w, float h, const std::string
     SDL_Rect r = R(x, y, w, h);
     bool hit = uiHit(id, r);
     bool foc = uiFocused(id);
-    fillRect(x, y, w, h, enabled ? (foc ? C(96, 132, 70, 240) : C(70, 78, 66, 225)) : C(50, 50, 50, 200));
-    fillRect(x, y, w, h * 0.08f, C(255, 255, 255, enabled ? 50 : 20));
-    fillRect(x, y + h * 0.92f, w, h * 0.08f, C(0, 0, 0, 90));
-    frameRect(x, y, w, h, std::max(2.f, h * 0.05f), foc ? C(255, 250, 160) : C(20, 22, 18, 255));
+    // нажатая кнопка на мгновение «проседает»
+    static std::unordered_map<int, Uint32> pressAt;
+    Uint32 now = SDL_GetTicks();
+    if (hit && enabled) pressAt[id] = now;
+    float pk = 0.f; { auto it = pressAt.find(id); if (it != pressAt.end() && now - it->second < 160) pk = 1.f - (now - it->second) / 160.f; }
+    float in = pk * h * 0.04f; x += in; y += in; w -= in * 2; h -= in * 2;
+    float rr = h * 0.2f;
+    roundRect(x + h * 0.03f, y + h * 0.07f, w, h, rr, C(0, 0, 0, 70), C(0, 0, 0, 70));   // тень под кнопкой
+    if (!enabled) roundRect(x, y, w, h, rr, C(64, 66, 70, 210), C(46, 48, 52, 210));
+    else if (foc) roundRect(x, y, w, h, rr, C(120, 168, 88, 245), C(72, 116, 52, 245));
+    else roundRect(x, y, w, h, rr, C((int)(92 - 30 * pk), (int)(106 - 30 * pk), (int)(86 - 30 * pk), 238), C((int)(58 - 20 * pk), (int)(66 - 20 * pk), (int)(54 - 20 * pk), 238));
+    roundRect(x + w * 0.04f, y + h * 0.06f, w * 0.92f, h * 0.36f, rr * 0.8f, C(255, 255, 255, enabled ? 34 : 12), C(255, 255, 255, 0));   // глянец сверху
+    roundFrame(x, y, w, h, rr, std::max(1.5f, h * 0.035f), foc ? C(255, 236, 140) : C(16, 18, 14, 230));
     float px = fontPx() * 1.25f * scaleMul;
-    while (textWidth(label, px) > w * 0.92f && px > 1.5f) px *= 0.9f;
+    while (textWidth(label, px) > w * 0.9f && px > 1.5f) px *= 0.9f;
     drawText(label, x + w / 2, y + h / 2 - 3.5f * px, px, enabled ? C(250, 250, 240) : C(140, 140, 140), 1);
     if (hit && enabled) playSound(SND_CLICK, 0.5f);
     return hit && enabled;
 }
 static void panel(float x, float y, float w, float h) {
-    fillRect(x, y, w, h, C(38, 40, 46, 235));
-    frameRect(x, y, w, h, std::max(2.f, uiS() * 0.4f), C(16, 16, 20, 255));
-    frameRect(x + uiS() * 0.4f, y + uiS() * 0.4f, w - uiS() * 0.8f, h - uiS() * 0.8f, std::max(1.f, uiS() * 0.2f), C(90, 94, 104, 255));
+    float r = uiS() * 2.2f;
+    for (int i = 3; i >= 1; i--) roundRect(x - i * uiS() * 0.5f, y - i * uiS() * 0.3f + uiS() * 0.8f, w + i * uiS(), h + i * uiS() * 0.6f, r + i * uiS() * 0.5f, C(0, 0, 0, 28), C(0, 0, 0, 28));   // мягкая тень
+    roundRect(x, y, w, h, r, C(50, 54, 64, 236), C(28, 30, 36, 242));
+    roundRect(x + uiS() * 0.4f, y + uiS() * 0.3f, w - uiS() * 0.8f, uiS() * 5.f, r * 0.8f, C(255, 255, 255, 18), C(255, 255, 255, 0));
+    roundFrame(x, y, w, h, r, std::max(1.5f, uiS() * 0.3f), C(12, 12, 16, 240));
+    roundFrame(x + uiS() * 0.3f, y + uiS() * 0.3f, w - uiS() * 0.6f, h - uiS() * 0.6f, r * 0.85f, std::max(1.f, uiS() * 0.15f), C(110, 116, 132, 150));
 }
 static void slotBg(float x, float y, float s, bool sel, bool foc) {
-    fillRect(x, y, s, s, C(24, 26, 30, 220));
-    frameRect(x, y, s, s, std::max(1.f, s * 0.05f), sel ? C(255, 255, 255) : C(110, 112, 120));
-    if (foc) frameRect(x - 2, y - 2, s + 4, s + 4, std::max(2.f, s * 0.07f), C(255, 240, 120));
+    float r = s * 0.14f;
+    roundRect(x, y, s, s, r, C(16, 17, 21, 225), C(30, 32, 38, 225));   // углублённая ячейка: темнее сверху
+    roundFrame(x, y, s, s, r, std::max(1.f, s * 0.035f), sel ? C(255, 255, 255, 255) : C(92, 96, 108, 220));
+    if (sel) roundFrame(x - s * 0.04f, y - s * 0.04f, s * 1.08f, s * 1.08f, r * 1.2f, std::max(1.f, s * 0.03f), C(255, 255, 255, 90));
+    if (foc) roundFrame(x - s * 0.06f, y - s * 0.06f, s * 1.12f, s * 1.12f, r * 1.3f, std::max(2.f, s * 0.06f), C(255, 236, 130));
 }
 
 // ---------------------------------------------------------------- операции со слотами
@@ -6985,8 +7746,8 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
         float tx = x + t * tw;
         bool selT = g_bookTab == t;
         if (uiHit(2950 + t, R(tx + 1, y, tw - 2, th))) { g_bookTab = t; g_bookPage = 0; playSound(SND_CLICK, 0.4f, 1.1f); }
-        fillRect(tx + 1, y, tw - 2, th + (selT ? 3 : 0), selT ? C(70, 74, 84, 255) : C(32, 34, 40, 230));
-        frameRect(tx + 1, y, tw - 2, th + (selT ? 3 : 0), 2, uiFocused(2950 + t) ? C(255, 240, 120) : (selT ? C(150, 154, 166) : C(20, 20, 24)));
+        roundRect(tx + 1, y, tw - 2, th + (selT ? 3 : 0), th * 0.18f, selT ? C(84, 90, 104, 255) : C(36, 38, 46, 230), selT ? C(62, 66, 78, 255) : C(26, 28, 34, 230));
+        roundFrame(tx + 1, y, tw - 2, th + (selT ? 3 : 0), th * 0.18f, 2, uiFocused(2950 + t) ? C(255, 240, 120) : (selT ? C(170, 176, 190) : C(16, 16, 20)));
         float is = th * 0.78f;
         if (tabIcon[t] < 0) drawTile(T_BOOK, tx + tw / 2 - is / 2, y + th / 2 - is / 2, is, is);
         else drawItemIcon(tabIcon[t], tx + tw / 2 - is / 2, y + th / 2 - is / 2, is);
@@ -7007,20 +7768,21 @@ static void drawRecipeBook(float x0, float y0, float w, float h, float bs) {
     for (int i = 0; i < PER; i++) {
         int li = g_bookPage * PER + i;
         float sx = gx0 + (i % COLS) * bs, sy = y + (i / COLS) * bs;
-        if (li >= (int)list.size()) { fillRect(sx + 2, sy + 2, bs - 4, bs - 4, C(26, 28, 32, 160)); continue; }
+        if (li >= (int)list.size()) { roundRect(sx + 2, sy + 2, bs - 4, bs - 4, bs * 0.13f, C(20, 22, 26, 150), C(30, 32, 38, 150)); continue; }
         const BookEntry& e = list[li];
         int wid = e.ench ? 3300 + e.rec[0] : 3000 + e.out;
         bool hit = uiHit(wid, R(sx + 2, sy + 2, bs - 4, bs - 4));
         bool foc = uiFocused(wid);
         SDL_Color bg = e.state == 0 ? C(44, 62, 46, 235) : (e.state == 1 ? C(78, 36, 36, 235) : C(36, 36, 40, 235));
         SDL_Color br = e.state == 0 ? C(110, 170, 100) : (e.state == 1 ? C(150, 70, 66) : C(70, 70, 76));
-        fillRect(sx + 2, sy + 2, bs - 4, bs - 4, bg);
-        frameRect(sx + 2, sy + 2, bs - 4, bs - 4, std::max(1.f, bs * 0.04f), foc ? C(255, 240, 120) : (g_bookSel == e.key ? C(240, 240, 240) : br));
+        { SDL_Color bg2 = bg; bg2.r = (Uint8)(bg.r * 0.7f); bg2.g = (Uint8)(bg.g * 0.7f); bg2.b = (Uint8)(bg.b * 0.7f);
+          roundRect(sx + 2, sy + 2, bs - 4, bs - 4, bs * 0.13f, bg, bg2); }
+        roundFrame(sx + 2, sy + 2, bs - 4, bs - 4, bs * 0.13f, std::max(1.f, bs * 0.04f), foc ? C(255, 240, 120) : (g_bookSel == e.key ? C(240, 240, 240) : br));
         drawItemIcon(e.out, sx + bs * 0.12f, sy + bs * 0.12f, bs * 0.76f);
         if (e.ench) drawGlintIcon(e.out, sx + bs * 0.12f, sy + bs * 0.12f, bs * 0.76f);
         const Recipe& r0 = g_recipes[e.rec[0]];
         if (r0.cnt > 1) drawText(std::to_string(r0.cnt), sx + bs - px * 1.5f, sy + bs - px * 9.5f, px * 0.9f, C(255, 255, 255), 2);
-        if (e.state != 0) fillRect(sx + 2, sy + 2, bs - 4, bs - 4, C(0, 0, 0, 90));
+        if (e.state != 0) roundRect(sx + 2, sy + 2, bs - 4, bs - 4, bs * 0.13f, C(0, 0, 0, 90), C(0, 0, 0, 90));
         if (e.state == 2) { fillRect(sx + bs * 0.52f, sy + bs * 0.04f, bs * 0.44f, bs * 0.44f, C(20, 20, 24, 200)); drawItemIcon(B_CRAFT, sx + bs * 0.54f, sy + bs * 0.06f, bs * 0.4f); }
         if (foc) focusEntry = e.key;
         if (hit) {
@@ -7389,8 +8151,10 @@ static std::vector<Finger> g_fingers;
 static const Uint32 HOLD_MS = 300, TAP_MS = 300;
 
 static void drawRoundButton(const float* b, const std::string& label, bool pressed, int icon = -1) {
-    fillCircle(b[0], b[1], b[2], pressed ? C(255, 255, 255, 110) : C(20, 20, 24, 90));
-    ringCircle(b[0], b[1], b[2], std::max(2.f, b[2] * 0.06f), C(255, 255, 255, 150));
+    fillCircle(b[0], b[1] + b[2] * 0.05f, b[2] * 1.02f, C(0, 0, 0, 50));
+    fillCircle(b[0], b[1], b[2], pressed ? C(255, 255, 255, 110) : C(20, 22, 28, 100));
+    fillCircle(b[0], b[1] - b[2] * 0.35f, b[2] * 0.55f, C(255, 255, 255, pressed ? 30 : 14));
+    ringCircle(b[0], b[1], b[2], std::max(2.f, b[2] * 0.05f), C(255, 255, 255, pressed ? 220 : 150));
     float px = fontPx() * 0.95f;
     if (icon >= 0) drawTile(icon, b[0] - b[2] * 0.45f, b[1] - b[2] * 0.7f, b[2] * 0.9f, b[2] * 0.9f, 220);
     while (textWidth(label, px) > b[2] * 1.8f && px > 1.2f) px *= 0.9f;
@@ -7398,14 +8162,26 @@ static void drawRoundButton(const float* b, const std::string& label, bool press
 }
 static void drawHotbar() {
     const TouchLayout& t = g_tl;
-    for (int i = 0; i < 9; i++) {
-        float x = t.hotX + i * t.hotS;
-        fillRect(x, t.hotY, t.hotS, t.hotS, C(20, 20, 24, 150));
-        frameRect(x, t.hotY, t.hotS, t.hotS, std::max(1.f, t.hotS * 0.04f), C(150, 150, 150, 200));
-        drawStack(P.inv[i], x + t.hotS * 0.08f, t.hotY + t.hotS * 0.08f, t.hotS * 0.84f);
+    {   // общая подложка панели
+        float pad = t.hotS * 0.06f;
+        roundRect(t.hotX - pad, t.hotY - pad + t.hotS * 0.05f, t.hotS * 9 + pad * 2, t.hotS + pad * 2, t.hotS * 0.22f, C(0, 0, 0, 60), C(0, 0, 0, 60));
+        roundRect(t.hotX - pad, t.hotY - pad, t.hotS * 9 + pad * 2, t.hotS + pad * 2, t.hotS * 0.2f, C(30, 32, 40, 150), C(14, 15, 20, 175));
+        roundFrame(t.hotX - pad, t.hotY - pad, t.hotS * 9 + pad * 2, t.hotS + pad * 2, t.hotS * 0.2f, std::max(1.f, t.hotS * 0.025f), C(0, 0, 0, 200));
     }
-    float sx = t.hotX + P.sel * t.hotS;
-    frameRect(sx - 3, t.hotY - 3, t.hotS + 6, t.hotS + 6, std::max(3.f, t.hotS * 0.07f), C(255, 255, 255, 240));
+    for (int i = 0; i < 9; i++) {
+        float x = t.hotX + i * t.hotS, in = t.hotS * 0.05f;
+        roundRect(x + in, t.hotY + in, t.hotS - in * 2, t.hotS - in * 2, t.hotS * 0.14f, C(10, 10, 14, 120), C(40, 42, 50, 110));
+        roundFrame(x + in, t.hotY + in, t.hotS - in * 2, t.hotS - in * 2, t.hotS * 0.14f, std::max(1.f, t.hotS * 0.02f), C(140, 144, 156, 110));
+        drawStack(P.inv[i], x + t.hotS * 0.1f, t.hotY + t.hotS * 0.1f, t.hotS * 0.8f);
+    }
+    {   // выбранная ячейка: мягкое свечение и светлая рамка
+        static float selX = -1; float tx = t.hotX + P.sel * t.hotS;
+        if (selX < 0 || fabsf(selX - tx) > t.hotS * 9) selX = tx;
+        selX += (tx - selX) * std::min(1.f, g_frameDt * 18.f);   // рамка плавно переезжает
+        float sx = selX, g = t.hotS * 0.12f;
+        roundRect(sx - g, t.hotY - g, t.hotS + g * 2, t.hotS + g * 2, t.hotS * 0.3f, C(255, 255, 230, 40), C(255, 255, 230, 20));
+        roundFrame(sx - t.hotS * 0.02f, t.hotY - t.hotS * 0.02f, t.hotS * 1.04f, t.hotS * 1.04f, t.hotS * 0.2f, std::max(2.f, t.hotS * 0.06f), C(255, 255, 255, 245));
+    }
     {   // подобранные предметы
         float px = fontPx() * 0.95f;
         float baseY = t.hotY - (g_mode == GM_SURVIVAL ? t.hotS * 0.75f : 0) - px * 28;
@@ -7415,7 +8191,7 @@ static void drawHotbar() {
             std::string txt = "+" + std::to_string(p.cnt) + " " + itemName(p.id);
             float tw = textWidth(txt, px), is = px * 9;
             float x = t.hotX + t.hotS * 9 - tw - is - px * 4, y = baseY - i * px * 11;
-            fillRect(x - px * 2, y - px * 1.5f, tw + is + px * 6, px * 10, C(0, 0, 0, a / 2));
+            roundRect(x - px * 2, y - px * 1.5f, tw + is + px * 6, px * 10, px * 3, C(10, 12, 18, a * 2 / 3), C(0, 0, 0, a / 2));
             drawItemIcon(p.id, x, y - px, is);
             drawText(txt, x + is + px * 2, y, px, C(255, 255, 255, a));
         }
@@ -7473,12 +8249,28 @@ static void drawHUD() {
     }
     drawStatusBars();
     drawHotbar();
+    if (g_mode == GM_SURVIVAL && g_playTime < 70.f && !P.dead) {   // подсказки новичку в первые минуты нового мира
+        static const char* H[5] = {"ДЖОЙСТИК СЛЕВА - ХОДИТЬ, ПАЛЕЦ СПРАВА - ОСМАТРИВАТЬСЯ", "ЗАЖМИ ПАЛЕЦ НА ДЕРЕВЕ, ЧТОБЫ ДОБЫТЬ БРЕВНО",
+                                   "ОТКРОЙ СУМКУ КНОПКОЙ С ТРЕМЯ ТОЧКАМИ И СДЕЛАЙ ДОСКИ", "ИЗ 4 ДОСОК СДЕЛАЙ ВЕРСТАК - ОН ОТКРОЕТ НОВЫЕ РЕЦЕПТЫ",
+                                   "К НОЧИ ПОСТРОЙ УКРЫТИЕ И ЗАЖГИ ФАКЕЛЫ"};
+        int k = (int)((g_playTime - 2.f) / 13.f); float ph = (g_playTime - 2.f) - k * 13.f;
+        if (g_playTime > 2.f && k >= 0 && k < 5 && ph < 10.f) {
+            float a = std::min(1.f, std::min(ph / 0.5f, (10.f - ph) / 0.6f));
+            float hp = fontPx() * 0.95f; std::string hs = H[k];
+            while (textWidth(hs, hp) > g_W * 0.6f && hp > 1.2f) hp *= 0.93f;
+            float tw = textWidth(hs, hp), bw = tw + hp * 10, bh = hp * 12, bx = (g_W - bw) / 2, by = insetTop() + uiS() * 2 - (1.f - a) * uiS() * 3;
+            roundRect(bx, by, bw, bh, bh * 0.3f, C(30, 34, 46, (int)(215 * a)), C(18, 20, 28, (int)(225 * a)));
+            roundFrame(bx, by, bw, bh, bh * 0.3f, std::max(1.f, uiS() * 0.2f), C(255, 214, 110, (int)(200 * a)));
+            drawText(hs, g_W / 2.f, by + bh / 2 - 3.5f * hp, hp, C(255, 244, 210, (int)(255 * a)), 1);
+        }
+    }
     float px = fontPx();
     if (g_touchUsed || !g_ui.pad) {
         // кнопка инвентаря
-        fillRect((float)t.inv.x, (float)t.inv.y, (float)t.inv.w, (float)t.inv.h, C(20, 20, 24, 150));
-        frameRect((float)t.inv.x, (float)t.inv.y, (float)t.inv.w, (float)t.inv.h, 2, C(150, 150, 150, 200));
-        drawText("...", t.inv.x + t.inv.w / 2.f, t.inv.y + t.inv.h / 2.f - 5 * px, px * 1.4f, C(255, 255, 255), 1);
+        float rr = t.inv.h * 0.22f;
+        roundRect((float)t.inv.x, (float)t.inv.y, (float)t.inv.w, (float)t.inv.h, rr, C(30, 32, 40, 160), C(14, 15, 20, 180));
+        roundFrame((float)t.inv.x, (float)t.inv.y, (float)t.inv.w, (float)t.inv.h, rr, std::max(1.5f, t.inv.h * 0.03f), C(170, 174, 186, 170));
+        for (int d = -1; d <= 1; d++) fillCircle(t.inv.x + t.inv.w / 2.f + d * t.inv.w * 0.22f, t.inv.y + t.inv.h / 2.f, t.inv.w * 0.075f, C(255, 255, 255, 235));
     }
     if (g_touchUsed) {
         // джойстик
@@ -7499,13 +8291,17 @@ static void drawHUD() {
         if (P.flying) drawRoundButton(t.bDown, "ВНИЗ", g_btnDown);
     }
     // пауза
-    fillRect((float)t.pause.x, (float)t.pause.y, (float)t.pause.w, (float)t.pause.h, C(20, 20, 24, 140));
-    frameRect((float)t.pause.x, (float)t.pause.y, (float)t.pause.w, (float)t.pause.h, 2, C(200, 200, 200, 200));
-    fillRect(t.pause.x + t.pause.w * 0.3f, t.pause.y + t.pause.h * 0.25f, t.pause.w * 0.13f, t.pause.h * 0.5f, C(255, 255, 255));
-    fillRect(t.pause.x + t.pause.w * 0.57f, t.pause.y + t.pause.h * 0.25f, t.pause.w * 0.13f, t.pause.h * 0.5f, C(255, 255, 255));
+    {
+        float pr = t.pause.h * 0.24f;
+        roundRect((float)t.pause.x, (float)t.pause.y, (float)t.pause.w, (float)t.pause.h, pr, C(30, 32, 40, 150), C(14, 15, 20, 175));
+        roundFrame((float)t.pause.x, (float)t.pause.y, (float)t.pause.w, (float)t.pause.h, pr, std::max(1.5f, t.pause.h * 0.03f), C(190, 194, 206, 170));
+        roundRect(t.pause.x + t.pause.w * 0.3f, t.pause.y + t.pause.h * 0.27f, t.pause.w * 0.14f, t.pause.h * 0.46f, t.pause.w * 0.04f, C(255, 255, 255), C(225, 225, 230));
+        roundRect(t.pause.x + t.pause.w * 0.56f, t.pause.y + t.pause.h * 0.27f, t.pause.w * 0.14f, t.pause.h * 0.46f, t.pause.w * 0.04f, C(255, 255, 255), C(225, 225, 230));
+    }
     if (g_mode == GM_CREATIVE) {
-        fillRect((float)t.fly.x, (float)t.fly.y, (float)t.fly.w, (float)t.fly.h, P.flying ? C(90, 140, 220, 180) : C(20, 20, 24, 140));
-        frameRect((float)t.fly.x, (float)t.fly.y, (float)t.fly.w, (float)t.fly.h, 2, C(200, 200, 200, 200));
+        float fr = t.fly.h * 0.24f;
+        roundRect((float)t.fly.x, (float)t.fly.y, (float)t.fly.w, (float)t.fly.h, fr, P.flying ? C(110, 160, 240, 190) : C(30, 32, 40, 150), P.flying ? C(60, 100, 190, 200) : C(14, 15, 20, 175));
+        roundFrame((float)t.fly.x, (float)t.fly.y, (float)t.fly.w, (float)t.fly.h, fr, std::max(1.5f, t.fly.h * 0.03f), C(190, 194, 206, 170));
         drawText("ЛЕТ", t.fly.x + t.fly.w / 2.f, t.fly.y + t.fly.h / 2.f - 3.5f * px * 0.9f, px * 0.9f, C(255, 255, 255), 1);
     }
     // сообщения и отладка
@@ -7528,21 +8324,88 @@ static WorldInfo g_worldInfos[MAX_WORLDS + 1];
 static int g_newMode = GM_SURVIVAL; static u32 g_newSeed = 1; static int g_delSlot = 0;
 static void refreshWorldList() { for (int i = 1; i <= MAX_WORLDS; i++) g_worldInfos[i] = readWorldInfo(i); }
 static void drawBackdrop(float t) {
-    // фон меню: медленно плывущие «кубики»
-    SDL_SetRenderDrawColor(g_ren, 40, 60, 90, 255); SDL_RenderClear(g_ren);
-    float s = g_H / 10.f;
-    int cols = (int)(g_W / s) + 2, rows = (int)(g_H / s) + 2;
-    for (int y = 0; y < rows; y++) for (int x = 0; x < cols; x++) {
-        float ox = fmodf(t * 8.f, s);
-        int tile = -1;
-        if (y > rows / 2) {
-            if (y == rows / 2 + 1) tile = (int)T_GRASS_SIDE;
-            else tile = (hash3i(x, y, 0, 5) % 9 == 0) ? (int)T_COAL_ORE + (int)(hash3i(x, y, 1, 5) % 4) : (int)T_STONE;
-        }
-        if (tile < 0) continue;
-        drawTile(tile, x * s - ox, y * s, s + 1, s + 1, 255);
+    // фон меню: живой пейзаж — небо, солнце, облака, слои гор и холмов с деревьями, плывущие с разной скоростью
+    const float W = (float)g_W, H = (float)g_H;
+    SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    auto vtx = [](float x, float y, SDL_Color c) { SDL_Vertex v; v.position.x = x; v.position.y = y; v.color = c; v.tex_coord.x = v.tex_coord.y = 0; return v; };
+    {   // небо
+        SDL_Vertex v[6] = {vtx(0, 0, C(52, 98, 178)), vtx(W, 0, C(52, 98, 178)), vtx(W, H * 0.62f, C(244, 196, 150)), vtx(0, H * 0.62f, C(244, 196, 150)),
+                           vtx(W, H, C(250, 214, 170)), vtx(0, H, C(250, 214, 170))};
+        int idx[12] = {0, 1, 2, 0, 2, 3, 3, 2, 4, 3, 4, 5};
+        SDL_RenderGeometry(g_ren, NULL, v, 6, idx, 12);
     }
-    fillRect(0, 0, (float)g_W, (float)g_H, C(10, 14, 30, 120));
+    {   // солнце с сиянием
+        const float warm[3] = {1.f, 0.82f, 0.5f};
+        float sx = W * 0.76f, sy = H * 0.44f;
+        drawGlow(sx, sy, H * 0.55f, warm, 0.35f);
+        fillCircle(sx, sy, H * 0.075f, C(255, 236, 190));
+        fillCircle(sx, sy, H * 0.06f, C(255, 248, 225));
+    }
+    // облака: мягкие «подушки» из кругов
+    for (int i = 0; i < 7; i++) {
+        float sp = 6.f + (i % 3) * 3.f, span = W * 1.5f;
+        float cx = fmodf(i * 0.37f * W + t * sp, span) - W * 0.25f, cy = H * (0.1f + 0.06f * (i % 4)), sc = H * (0.035f + 0.012f * (i % 3));
+        for (int pass = 0; pass < 2; pass++) for (int k = 0; k < 6; k++) {   // сначала тень всех «подушек», потом сами — без видимых кругов внутри
+            float ox = (k - 2.5f) * sc * 0.9f, oy = -sinf(k * 0.6f + 0.3f) * sc * 0.6f, r = sc * (0.8f + 0.35f * sinf(k * 1.3f + i));
+            if (pass == 0) fillCircle(cx + ox, cy + oy + sc * 0.22f, r, C(206, 160, 156, 255));
+            else fillCircle(cx + ox, cy + oy, r * 0.97f, C(255, 250, 244, 255));
+        }
+    }
+    // слои гор: ступенчатые силуэты, дальние — светлее и голубее (воздушная перспектива)
+    struct Lay { float bs, base, amp, speed; SDL_Color top, bot; bool snow; };
+    const Lay L[3] = {{H * 0.022f, 0.52f, 0.5f, 3.f, C(150, 160, 196), C(178, 176, 196), true},
+                      {H * 0.03f, 0.6f, 0.4f, 7.f, C(96, 116, 150), C(140, 140, 160), false},
+                      {H * 0.04f, 0.68f, 0.3f, 13.f, C(58, 86, 96), C(92, 104, 112), false}};
+    for (int li = 0; li < 3; li++) {
+        const Lay& l = L[li];
+        float scroll = t * l.speed;
+        int c0 = ifloor(scroll / l.bs), n = (int)(W / l.bs) + 2;
+        std::vector<SDL_Vertex> vb; std::vector<int> ib;
+        for (int c = 0; c < n; c++) {
+            int wc = c0 + c;
+            float h = nDetail.n2(wc * 0.06f + li * 31.f, li * 7.f) * 0.7f + nDetail.n2(wc * 0.17f + li * 13.f, 3.f) * 0.3f;
+            float top = H * (l.base - l.amp * h);
+            top = floorf(top / l.bs) * l.bs;   // ступеньки по размеру блока
+            float x = c * l.bs - fmodf(scroll, l.bs) - l.bs;
+            int b = (int)vb.size();
+            vb.push_back(vtx(x, top, l.top)); vb.push_back(vtx(x + l.bs + 1, top, l.top)); vb.push_back(vtx(x + l.bs + 1, H, l.bot)); vb.push_back(vtx(x, H, l.bot));
+            int q[6] = {b, b + 1, b + 2, b, b + 2, b + 3}; ib.insert(ib.end(), q, q + 6);
+            if (l.snow && h > 0.3f) {   // снежные шапки
+                int bb = (int)vb.size(); SDL_Color sw = C(236, 238, 248);
+                vb.push_back(vtx(x, top, sw)); vb.push_back(vtx(x + l.bs + 1, top, sw)); vb.push_back(vtx(x + l.bs + 1, top + l.bs, sw)); vb.push_back(vtx(x, top + l.bs, sw));
+                int q2[6] = {bb, bb + 1, bb + 2, bb, bb + 2, bb + 3}; ib.insert(ib.end(), q2, q2 + 6);
+            }
+        }
+        SDL_RenderGeometry(g_ren, NULL, vb.data(), (int)vb.size(), ib.data(), (int)ib.size());
+    }
+    // ближние холмы из настоящих блоков, с деревьями
+    {
+        float bs = H / 13.f, speed = 22.f, scroll = t * speed;
+        int c0 = ifloor(scroll / bs), n = (int)(W / bs) + 3;
+        for (int c = -1; c < n; c++) {
+            int wc = c0 + c;
+            float h = nDetail.n2(wc * 0.09f, 91.f) * 0.75f + nDetail.n2(wc * 0.23f, 17.f) * 0.25f;
+            int topRow = clampi(9 + (int)lroundf(-h * 7.f), 7, 11);
+            float x = c * bs - fmodf(scroll, bs);
+            for (int r = topRow; r <= 13; r++) {
+                int tile = r == topRow ? (int)T_GRASS_SIDE : (r < topRow + 3 ? (int)T_DIRT : ((hash3i(wc, r, 0, 9) % 11 == 0) ? (int)T_COAL_ORE + (int)(hash3i(wc, r, 1, 9) % 4) : (int)T_STONE));
+                drawTile(tile, x, r * bs, bs + 1, bs + 1, 255);
+            }
+            if (hash3i(wc, 0, 7, 3) % 7 == 0) {   // дерево
+                int th = 3 + (int)(hash3i(wc, 1, 7, 3) % 2);
+                for (int k = 1; k <= th; k++) drawTile(T_LOG, x, (topRow - k) * bs, bs + 1, bs + 1, 255);
+                for (int ly = 0; ly < 3; ly++) for (int lx = -1; lx <= 1; lx++) {
+                    if (ly == 0 && lx != 0) continue;
+                    drawTile(T_LEAVES, x + lx * bs, (topRow - th - 2 + ly) * bs, bs + 1, bs + 1, 255);
+                }
+            }
+        }
+    }
+    {   // затемнение снизу (кнопки читаются лучше) и мягкая виньетка
+        SDL_Vertex v[4] = {vtx(0, H * 0.5f, C(8, 10, 20, 0)), vtx(W, H * 0.5f, C(8, 10, 20, 0)), vtx(W, H, C(8, 10, 20, 150)), vtx(0, H, C(8, 10, 20, 150))};
+        int idx[6] = {0, 1, 2, 0, 2, 3}; SDL_RenderGeometry(g_ren, NULL, v, 4, idx, 6);
+        drawEdgeGlow(8, 10, 24, 0.45f);
+    }
 }
 // логотип: BUILD — золотом, WORLD — зелёным. reveal — время появления букв (сек), <0 — всё сразу
 static const char* LOGO = "BUILDWORLD";
@@ -7627,8 +8490,9 @@ static void createTextures() {
     SDL_SetTextureScaleMode(g_atlasTex, g_tileRes > 16 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);   // детальные текстуры — сглаживать, пиксельные — нет
     g_animFrameW = g_animFrameL = -1;
     g_fontTex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, FONT_TEX_W, FONT_TEX_H);
-    SDL_UpdateTexture(g_fontTex, NULL, g_fontPx, FONT_TEX_W * 4);
+    SDL_UpdateTexture(g_fontTex, NULL, g_fontPx.data(), FONT_TEX_W * 4);
     SDL_SetTextureBlendMode(g_fontTex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(g_fontTex, SDL_ScaleModeLinear);
     createGlowTexture();
 }
 
@@ -7678,6 +8542,7 @@ static void giveCreativeKit() {
 static void startNewWorld(int slot, u32 seed, int mode) {
     resetWorldState();
     g_worldSlot = slot; g_worldName = "МИР " + std::to_string(slot);
+    g_genVer = 2;
     worldInitNoise(seed); g_mode = mode;
     int sx = 0, sz = 0;
     for (int i = 0; i < 4000; i++) {
@@ -7920,8 +8785,30 @@ static void gatherGameInput(float dt) {
 }
 
 // ---------------------------------------------------------------- обновление мира
+// звуки окружения: птицы днём, сверчки ночью, гул в пещерах, ветер на высоте
+static void updateAmbient(float dt) {
+    static float tBird = 5, tCrick = 3, tCave = 12, tWind = 6;
+    Rng r(SDL_GetTicks() * 31 + 7);
+    int ex = ifloor(P.x), ey = ifloor(P.y + PL_EYE), ez = ifloor(P.z);
+    g_underwaterAudio = getBlock(ex, ey, ez) == B_WATER ? 1 : 0;
+    int sky, bl; getLightAt(ex, ey, ez, sky, bl);
+    bool surface = sky >= 11, under = sky <= 3 && P.y < 60;
+    tBird -= dt; tCrick -= dt; tCave -= dt; tWind -= dt;
+    if (tBird <= 0) { tBird = 5.f + r.f() * 12.f; if (surface && !isNight() && !g_underwaterAudio) playSound(r.range(2) ? SND_BIRD : SND_BIRD2, 0.1f + r.f() * 0.12f, 0.85f + r.f() * 0.35f); }
+    if (tCrick <= 0) { tCrick = 3.f + r.f() * 6.f; if (surface && isNight()) playSound(SND_CRICKET, 0.08f + r.f() * 0.07f, 0.9f + r.f() * 0.2f); }
+    if (tCave <= 0) { tCave = 20.f + r.f() * 35.f; if (under) playSound(SND_CAVE, 0.35f, 0.8f + r.f() * 0.3f); }
+    if (tWind <= 0) { tWind = 7.f + r.f() * 8.f; if (P.y > 95 && surface) playSound(SND_WIND, 0.25f, 0.8f + r.f() * 0.3f); }
+}
+static int musicMoodNow() {
+    int ex = ifloor(P.x), ey = ifloor(P.y + PL_EYE), ez = ifloor(P.z);
+    int sky, bl; getLightAt(ex, ey, ez, sky, bl);
+    if ((sky <= 3 && P.y < 60) || isNight()) return 2;
+    float sh = sunHeight();
+    return sh < 0.25f ? 1 : 0;
+}
 static void updateGame(float dt) {
     g_playTime += dt;
+    updateAmbient(dt);
     g_dayTime += dt / DAY_LEN; if (g_dayTime >= 1) g_dayTime -= 1;
     g_msgT = std::max(0.f, g_msgT - dt);
     g_heldNameT = std::max(0.f, g_heldNameT - dt);
@@ -7967,7 +8854,14 @@ static void renderWorld() {
     if (underwater) { g_fogStart = 2.f; g_fogEnd = 18.f; }
     if (inLava) { g_fogStart = 0.f; g_fogEnd = 3.f; }
     g_cam.x = P.x; g_cam.y = P.y + PL_EYE - fabsf(sinf(P.bobPhase)) * 0.06f * P.bobAmt; g_cam.z = P.z;
+    float shYaw = 0, shPitch = 0;
+    if (g_shake > 0) {
+        float k = g_shake * g_shake, t = g_time * 37.f;
+        shYaw = (sinf(t) * 0.6f + sinf(t * 2.3f) * 0.4f) * 0.035f * k; shPitch = (cosf(t * 1.7f) * 0.6f + sinf(t * 3.1f) * 0.4f) * 0.03f * k;
+        g_cam.yaw += shYaw; g_cam.pitch += shPitch;
+    }
     camUpdate();
+    g_cam.yaw -= shYaw; g_cam.pitch -= shPitch;   // управление камерой не сбивается
     g_shaders = g_set.shaders; g_fxTime = g_time;
     computeFX(g_dayTime, g_time);
     updateAnimTiles(g_time);
@@ -7994,9 +8888,23 @@ static void renderWorld() {
     emitHand();
     flushPolys(g_atlasTex);
     drawLensFX(g_cam.x, g_cam.y, g_cam.z, underwater);
-    if (underwater) fillRect(0, 0, (float)g_W, (float)g_H, C(20, 60, 160, 90));
+    if (g_set.shaders > 0) {   // цветокоррекция всего кадра
+        SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_MOD);
+        SDL_SetRenderDrawColor(g_ren, (Uint8)(g_grade[0] * 255), (Uint8)(g_grade[1] * 255), (Uint8)(g_grade[2] * 255), 255);
+        SDL_RenderFillRect(g_ren, NULL);
+        SDL_SetRenderDrawBlendMode(g_ren, SDL_BLENDMODE_BLEND);
+    }
+    if (underwater) fillRect(0, 0, (float)g_W, (float)g_H, C(20, 60, 160, 70));
     if (inLava) fillRect(0, 0, (float)g_W, (float)g_H, C(220, 90, 10, 200));
-    if (P.hurtFlash > 0) fillRect(0, 0, (float)g_W, (float)g_H, C(200, 0, 0, (int)(P.hurtFlash * 250)));
+    // урон и мало здоровья: красное свечение по краям экрана (пульсирует как сердцебиение)
+    {
+        float a = P.hurtFlash / 0.35f * 0.75f;
+        if (!P.dead && g_mode == GM_SURVIVAL && P.health <= 6.f) {
+            float beat = powf(std::max(0.f, sinf(g_time * 7.5f)), 6.f);
+            a = std::max(a, (0.25f + 0.35f * beat) * (1.f - P.health / 7.f) + 0.15f);
+        }
+        if (a > 0.01f) drawEdgeGlow(190, 0, 0, std::min(1.f, a));
+    }
 }
 
 // ---------------------------------------------------------------- экраны меню
@@ -8209,9 +9117,20 @@ static void screenLoading() {
     }
     drawBackdrop(g_time);
     drawTitle("СОЗДАНИЕ МИРА...", g_H * 0.35f, 2.2f);
-    float bw = g_W * 0.5f, bh = uiS() * 4;
-    fillRect((g_W - bw) / 2, g_H * 0.55f, bw, bh, C(20, 20, 20, 220));
-    fillRect((g_W - bw) / 2, g_H * 0.55f, bw * done / (float)need, bh, C(110, 190, 80));
+    float bw = g_W * 0.5f, bh = uiS() * 4, bx = (g_W - bw) / 2, by = g_H * 0.55f;
+    static float shown = 0; float want = done / (float)need; shown += (want - shown) * std::min(1.f, g_frameDt * 8.f); if (want < shown - 0.5f) shown = want;
+    roundRect(bx, by, bw, bh, bh / 2, C(16, 18, 22, 220), C(30, 32, 38, 220));
+    if (shown > 0.01f) roundRect(bx, by, std::max(bh, bw * shown), bh, bh / 2, C(150, 220, 110), C(80, 160, 60));
+    roundFrame(bx, by, bw, bh, bh / 2, std::max(1.f, bh * 0.08f), C(0, 0, 0, 200));
+    {   // совет на время загрузки
+        static const char* TIPS[] = {"ЗАЖМИ ЭКРАН НА БЛОКЕ, ЧТОБЫ ЕГО СЛОМАТЬ", "КОРОТКОЕ КАСАНИЕ СТАВИТ БЛОК ИЛИ ИСПОЛЬЗУЕТ ПРЕДМЕТ",
+            "БРЕВНО -> ДОСКИ -> ВЕРСТАК: С ЭТОГО НАЧИНАЕТСЯ ВСЁ", "ЖЕЛЕЗО НУЖНО ПЕРЕПЛАВИТЬ В ПЕЧИ", "ФАКЕЛЫ ОТПУГИВАЮТ НОЧНЫХ ЧУДИЩ",
+            "КРОВАТЬ ПЕРЕНОСИТ ТОЧКУ ВОЗРОЖДЕНИЯ", "УДОЧКОЙ ИНОГДА ВЫЛАВЛИВАЮТ ЗАЧАРОВАННЫЕ КНИГИ", "АЛМАЗЫ ПРЯЧУТСЯ ГЛУБОКО ПОД ЗЕМЛЁЙ"};
+        static int tip = -1; if (tip < 0) tip = (int)(SDL_GetTicks() / 7 % 8);
+        float tp = fontPx(); std::string tt = std::string("СОВЕТ: ") + TIPS[tip];
+        while (textWidth(tt, tp) > g_W * 0.9f && tp > 1.2f) tp *= 0.92f;
+        drawText(tt, g_W / 2.f, by + bh + uiS() * 6, tp, C(255, 240, 200), 1);
+    }
     if (done >= need) {
         if (g_needSpawnY) {
             int x = ifloor(P.x), z = ifloor(P.z), y = WH - 2;
@@ -8244,11 +9163,14 @@ static void screenDead() {
     if (button(70, bx, by, bw, bh, "ВОЗРОДИТЬСЯ")) { respawnPlayer(); g_needSpawnY = false; g_screen = SCR_LOADING; }
     if (button(71, bx, by + bh * 1.3f, bw, bh, "В ГЛАВНОЕ МЕНЮ")) { respawnPlayer(); exitToMenu(); }
 }
+static float g_rowX = 0, g_rowW = 0;   // колонка строк настроек
 static void settingRow(int id, float y, const std::string& name, const std::string& val, int& delta) {
     float S = uiS();
-    float w = std::min(S * 150, g_W * 0.8f), x = (g_W - w) / 2, h = S * 8;
-    fillRect(x, y, w, h, C(30, 32, 38, 200));
-    drawText(name, x + S * 3, y + h / 2 - 3.5f * fontPx(), fontPx(), C(240, 240, 240));
+    float w = g_rowW, x = g_rowX, h = S * 8;
+    roundRect(x, y, w, h, h * 0.22f, C(40, 43, 52, 215), C(26, 28, 34, 215));
+    roundFrame(x, y, w, h, h * 0.22f, std::max(1.f, S * 0.15f), C(90, 96, 112, 150));
+    float np = fontPx(); while (textWidth(name, np) > w - S * 46 && np > 1.2f) np *= 0.92f;
+    drawText(name, x + S * 3, y + h / 2 - 3.5f * np, np, C(240, 240, 240));
     float bw = S * 12;
     if (button(id, x + w - bw * 3.6f, y, bw, h, "<")) delta = -1;
     drawText(val, x + w - bw * 2.05f, y + h / 2 - 3.5f * fontPx(), fontPx(), C(255, 230, 140), 1);
@@ -8258,24 +9180,30 @@ static void screenSettings() {
     if (g_settingsBack == SCR_MAIN) drawBackdrop(g_time); else fillRect(0, 0, (float)g_W, (float)g_H, C(0, 0, 0, 170));
     float S = uiS();
     drawTitle("НАСТРОЙКИ", (float)insetTop(), 2.2f);
-    float y = insetTop() + S * 10, step = S * 8.4f;
-    int d;
+    float y0 = insetTop() + S * 11, y = y0, step = S * 9.4f;
+    bool two = g_W > g_H * 1.5f;   // широкий экран — две колонки
+    float colW = two ? std::min(S * 105, g_W * 0.45f) : std::min(S * 150, g_W * 0.9f);
+    g_rowW = colW; g_rowX = two ? g_W / 2.f - colW - S * 2 : (g_W - colW) / 2;
+    auto nextCol = [&](int i) { if (two && i == 5) { y = y0; g_rowX = g_W / 2.f + S * 2; } };
+    int d, row = 0;
     char b[32];
-    d = 0; settingRow(80, y, "ДАЛЬНОСТЬ ПРОРИСОВКИ", std::to_string(g_set.renderDist) + " ЧАНК.", d); g_set.renderDist = clampi(g_set.renderDist + d, 4, 10); y += step;
-    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.sens * 100)); settingRow(82, y, "ЧУВСТВИТЕЛЬНОСТЬ", b, d); g_set.sens = clampf(g_set.sens + d * 0.1f, 0.2f, 3.f); y += step;
-    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.volume * 100)); settingRow(84, y, "ГРОМКОСТЬ", b, d); g_set.volume = clampf(g_set.volume + d * 0.1f, 0.f, 1.f); g_masterVol = g_set.volume; y += step;
-    d = 0; snprintf(b, sizeof(b), "%d%%", g_set.inset); settingRow(86, y, "ОТСТУП ОТ КРАЁВ (ВЫРЕЗ)", b, d); g_set.inset = clampi(g_set.inset + d, 0, 12); y += step;
-    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.uiScale * 100)); settingRow(88, y, "РАЗМЕР ТЕКСТА", b, d); g_set.uiScale = clampf(g_set.uiScale + d * 0.1f, 0.7f, 1.4f); y += step;
-    d = 0; settingRow(90, y, "АВТОПРЫЖОК", g_set.autoJump ? "ВКЛ" : "ВЫКЛ", d); if (d) g_set.autoJump = !g_set.autoJump; g_autoJump = g_set.autoJump; y += step;
+    d = 0; settingRow(80, y, "ДАЛЬНОСТЬ ПРОРИСОВКИ", std::to_string(g_set.renderDist) + " ЧАНК.", d); g_set.renderDist = clampi(g_set.renderDist + d, 4, 10); y += step; nextCol(++row);
+    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.sens * 100)); settingRow(82, y, "ЧУВСТВИТЕЛЬНОСТЬ", b, d); g_set.sens = clampf(g_set.sens + d * 0.1f, 0.2f, 3.f); y += step; nextCol(++row);
+    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.volume * 100)); settingRow(84, y, "ГРОМКОСТЬ", b, d); g_set.volume = clampf(g_set.volume + d * 0.1f, 0.f, 1.f); g_masterVol = g_set.volume; y += step; nextCol(++row);
+    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.music * 100)); settingRow(78, y, "МУЗЫКА", b, d); g_set.music = clampf(g_set.music + d * 0.1f, 0.f, 1.f); y += step; nextCol(++row);
+    d = 0; snprintf(b, sizeof(b), "%d%%", g_set.inset); settingRow(86, y, "ОТСТУП ОТ КРАЁВ (ВЫРЕЗ)", b, d); g_set.inset = clampi(g_set.inset + d, 0, 12); y += step; nextCol(++row);
+    d = 0; snprintf(b, sizeof(b), "%d%%", (int)lroundf(g_set.uiScale * 100)); settingRow(88, y, "РАЗМЕР ТЕКСТА", b, d); g_set.uiScale = clampf(g_set.uiScale + d * 0.1f, 0.7f, 1.4f); y += step; nextCol(++row);
+    d = 0; settingRow(90, y, "АВТОПРЫЖОК", g_set.autoJump ? "ВКЛ" : "ВЫКЛ", d); if (d) g_set.autoJump = !g_set.autoJump; g_autoJump = g_set.autoJump; y += step; nextCol(++row);
     { static const int RES[4] = {16, 32, 64, 128};
       int ri = 0; for (int i = 0; i < 4; i++) if (RES[i] == g_set.texRes) ri = i;
       d = 0; settingRow(96, y, "ДЕТАЛИЗАЦИЯ БЛОКОВ", std::to_string(g_set.texRes) + "X" + std::to_string(g_set.texRes), d);
       if (d) { ri = clampi(ri + d, 0, 3); if (RES[ri] != g_set.texRes) { g_set.texRes = RES[ri]; applyTextureRes(); } }
-      y += step; }
+      y += step; nextCol(++row); }
     { static const char* SH[3] = {"ВЫКЛ", "ЛЁГКИЕ", "ПОЛНЫЕ"};
-      d = 0; settingRow(94, y, "ШЕЙДЕРЫ", SH[g_set.shaders], d); g_set.shaders = (g_set.shaders + d + 3) % 3; g_shaders = g_set.shaders; y += step; }
+      d = 0; settingRow(94, y, "ШЕЙДЕРЫ", SH[g_set.shaders], d); g_set.shaders = (g_set.shaders + d + 3) % 3; g_shaders = g_set.shaders; y += step; nextCol(++row); }
     d = 0; settingRow(92, y, "ПОКАЗ FPS", g_set.showFps ? "ВКЛ" : "ВЫКЛ", d); if (d) g_set.showFps = !g_set.showFps; y += step;
-    if (button(99, (g_W - S * 40) / 2, std::min(y + S * 2, g_H - S * 11), S * 40, S * 9, "НАЗАД")) { saveSettings(); g_screen = g_settingsBack; g_ui.focus = -1; }
+    float by = two ? y0 + step * 5 + S * 2 : y + S * 2;
+    if (button(99, (g_W - S * 40) / 2, std::min(by, g_H - S * 11), S * 40, S * 9, "НАЗАД")) { saveSettings(); g_screen = g_settingsBack; g_ui.focus = -1; }
 }
 
 // ---------------------------------------------------------------- точка входа
@@ -8395,7 +9323,13 @@ int main(int argc, char** argv) {
         last = now;
         if (dt > 0.1f) dt = 0.1f;
         if (dt < 0) dt = 0;
-        g_time += dt;
+        g_time += dt; g_frameDt = dt;
+        {   // музыка: в меню — дневная, в игре — по времени суток и месту
+            bool inWorld = worldScreenActive() && g_screen != SCR_LOADING;
+            if (!inWorld) g_underwaterAudio = 0;
+            updateMusic(dt, inWorld ? musicMoodNow() : 0, !inWorld && g_screen != SCR_INTRO);
+            g_musicVol = g_set.music * 0.9f;
+        }
         fpsT += dt; fpsN++;
         if (fpsT >= 1.0) { g_fps = fpsN; fpsN = 0; fpsT = 0; }
         SDL_GetRendererOutputSize(g_ren, &g_W, &g_H);
@@ -8449,6 +9383,7 @@ int main(int argc, char** argv) {
     if (worldScreenActive()) { if (g_screen == SCR_INV) returnLooseItems(); saveWorld(); }
     saveSettings();
     freeAllChunks();
+    stopMusicThread();
     if (g_audioDev) SDL_CloseAudioDevice(g_audioDev);
     if (g_pad) SDL_GameControllerClose(g_pad);
     SDL_DestroyRenderer(g_ren);
