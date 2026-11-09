@@ -52,14 +52,21 @@ typedef int64_t i64;
 #endif
 
 // ---------------------------------------------------------------- утилиты
-static inline float clampf(float v, float a, float b) { return v < a ? a : (v > b ? b : v); }
+static inline float clampf(float v, float a, float b) { return !(v >= a) ? a : (v > b ? b : v); }   // NaN -> нижняя граница
+// угол в (-π, π]; для мусора (NaN, ∞, огромных чисел из сети или сохранения) — 0, а не вечный цикл
+static inline float wrapPi(float a) { if (!std::isfinite(a)) return 0.f; return remainderf(a, 6.2831853f); }
+// «нормальное» число в разумных пределах (для данных из сети и файлов)
+static inline bool saneF(double v, double lim) { return std::isfinite(v) && v > -lim && v < lim; }
 static inline int clampi(int v, int a, int b) { return v < a ? a : (v > b ? b : v); }
 static inline float lerpf(float a, float b, float t) { return a + (b - a) * t; }
 static inline float smooth01(float e0, float e1, float x) {
     float t = clampf((x - e0) / (e1 - e0), 0.f, 1.f);
     return t * t * (3.f - 2.f * t);
 }
-static inline int ifloor(double v) { int i = (int)v; return (v < i) ? i - 1 : i; }
+static inline int ifloor(double v) {
+    if (!(v > -2e9 && v < 2e9)) return v > 0 ? 2000000000 : (v < 0 ? -2000000000 : 0);   // NaN и огромные числа не ломают целые
+    int i = (int)v; return (v < i) ? i - 1 : i;
+}
 
 static void padRumble(float lo, float hi, int ms);   // вибрация геймпада (низкая/высокая частота 0..1)
 struct Rng {
@@ -475,6 +482,7 @@ static std::string stackName(const Stack& s) { std::string n = itemName(s.id); i
 //  ТЕКСТУРЫ: атлас 256x256 (16x16 тайлов по 16x16 пикселей), рисуется кодом
 // ============================================================================
 enum { ATLAS = 256, ATLAS_ROWS = 32, ATLAS_H = ATLAS_ROWS * 16 };   // 16 столбцов x 32 строки тайлов
+static_assert(T_COUNT <= 16 * ATLAS_ROWS, "тайлы не помещаются в атлас");
 static u32 g_atlasPx[ATLAS * ATLAS_H];
 
 static inline u32 RGBA(int r, int g, int b, int a = 255) {
@@ -828,18 +836,18 @@ static void genBlockTextures() {
           t.set(x, 15 - y, mixc(HEX(0x3b7329), HEX(0x86c95d), k)); } }
     // ЦВЕТЫ
     { TP t(T_FLOWER_R); t.clear();
-      for (int y = 8; y < 16; y++) t.set(7, y, HEX(0x3d7a2c)); t.set(8, 12, HEX(0x52983a)); t.set(9, 11, HEX(0x60aa43)); t.set(6, 13, HEX(0x52983a));
+      { for (int y = 8; y < 16; y++) t.set(7, y, HEX(0x3d7a2c)); } t.set(8, 12, HEX(0x52983a)); t.set(9, 11, HEX(0x60aa43)); t.set(6, 13, HEX(0x52983a));
       static const char* pet[5] = {".###.", "##.##", "#.#.#", "##.##", ".###."};
       for (int y = 0; y < 5; y++) for (int x = 0; x < 5; x++) if (pet[y][x] == '#') t.set(5 + x, 3 + y, (x + y < 4) ? HEX(0xf0464a) : HEX(0xc81e2c));
       t.set(7, 5, HEX(0xf2c230)); t.set(6, 4, HEX(0xff8a8a)); }
     { TP t(T_FLOWER_Y); t.clear();
-      for (int y = 9; y < 16; y++) t.set(8, y, HEX(0x3d7a2c)); t.set(7, 13, HEX(0x52983a)); t.set(6, 12, HEX(0x60aa43));
+      { for (int y = 9; y < 16; y++) t.set(8, y, HEX(0x3d7a2c)); } t.set(7, 13, HEX(0x52983a)); t.set(6, 12, HEX(0x60aa43));
       static const char* pet[5] = {"#.#.#", ".###.", "##.##", ".###.", "#.#.#"};
       for (int y = 0; y < 5; y++) for (int x = 0; x < 5; x++) if (pet[y][x] == '#') t.set(6 + x, 4 + y, (x + y < 4) ? HEX(0xffe45c) : HEX(0xe8b81e));
       t.set(8, 6, HEX(0xd2701c)); }
     // САЖЕНЕЦ
     { TP t(T_SAPLING); t.clear();
-      for (int y = 9; y < 16; y++) t.set(7, y, HEX(0x6e4b2c)); t.set(8, 11, HEX(0x5d3f24));
+      { for (int y = 9; y < 16; y++) t.set(7, y, HEX(0x6e4b2c)); } t.set(8, 11, HEX(0x5d3f24));
       static const char* cr[7] = {"..###..", ".#####.", "#######", "#######", ".#####.", "..#.#..", "......."};
       for (int y = 0; y < 7; y++) for (int x = 0; x < 7; x++) if (cr[y][x] == '#') t.set(4 + x, 3 + y, (x + y < 5) ? HEX(0x6cb64a) : ((x + y < 8) ? HEX(0x4d9338) : HEX(0x2f6224)));
       t.set(6, 4, HEX(0x9bd86b)); }
@@ -1217,7 +1225,7 @@ static void genAtlas() {
     { TP t(T_YAK_HEADSIDE); furStrands(t, 307, 0.35f); t.rect(10, 5, 12, 7, HEX(0x150d08)); t.set(11, 5, HEX(0xe8dcc8)); }
     { TP t(T_YAK_MUZZLE); TN n = makeNoise(308, {{4, 0.5f}, {1, 0.5f}}); fillNoise(t, mkPal({0x8f7a68, 0x9d8876, 0xab9684, 0xb8a492}), n, 0.5f);
       t.rect(3, 6, 5, 9, HEX(0x2a1c14)); t.rect(10, 6, 12, 9, HEX(0x2a1c14)); t.set(3, 6, HEX(0x4a382c)); t.set(10, 6, HEX(0x4a382c));
-      for (int x = 2; x < 14; x++) t.set(x, 13, HEX(0x6b5848)); bevel(t, 0, 0, 15, 15, 14, 18); }
+      { for (int x = 2; x < 14; x++) t.set(x, 13, HEX(0x6b5848)); } bevel(t, 0, 0, 15, 15, 14, 18); }
     { TP t(T_YAK_LEG); furStrands(t, 309, 0.45f); for (int y = 12; y < 16; y++) for (int x = 0; x < 16; x++) t.set(x, y, y == 12 ? HEX(0x2a2420) : HEX(0x1a1614)); for (int y = 13; y < 16; y++) t.set(7, y, HEX(0x0c0a08)); }
     { TP t(T_YAK_HORN); for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) { float k = (x + y) / 30.f; t.set(x, y, mixc(HEX(0xe9dfc6), HEX(0x6e5f4c), k)); }
       for (int i = 2; i < 16; i += 4) for (int x = 0; x < 16; x++) t.shade(x, i, -14); }
@@ -1474,7 +1482,7 @@ static void hdStone(HDT& t, u32 s, float tint = 0) {
         float patch = fbm(u, v, 2, 2, s + 8);                                       // крупные пятна оттенка
         C3 c = rp.at(n * 0.8f + rd * 0.25f - 0.05f + (strata - 0.5f) * 0.12f);
         c = cmix(c, cmul(c, patch > 0.5f ? 1.06f : 0.93f), fabsf(patch - 0.5f) * 1.2f);
-        if (sp > 0.93f) c = cmul(c, 1.15f); if (sp < 0.05f) c = cmul(c, 0.8f);
+        if (sp > 0.93f) c = cmul(c, 1.15f); else if (sp < 0.05f) c = cmul(c, 0.8f);
         float fl = hv(x, y, s + 9);                                                 // искорки кварца и тёмные вкрапления
         if (fl > 0.9965f) c = cmix(c, c3(0xe8e6e0), 0.7f); else if (fl < 0.003f) c = cmul(c, 0.55f);
         c.r += tint * 0.03f; c.b -= tint * 0.02f;
@@ -3220,7 +3228,7 @@ static void itemSample(int tile, float x, float y, float* out) {
             C3 c = grad3(c3(0x8a7a44), c3(0x5a3a2a), b);
             float v = fbm(a * 2.f, b * 2.f, 8, 3, 23); c = cmix(c, c3(0x6a8a3a), sstep(0.5f, 0.7f, v) * 0.7f);
             if (sstep(0.6f, 0.75f, fbm(a * 3.f, b * 3.f, 12, 2, 44)) > 0.5f) c = cmul(c, 0.55f);
-            if (t < 0.2f) c = cmul(c, 0.8f); return c; }, 0.14f);
+            if (t < 0.2f) { c = cmul(c, 0.8f); } return c; }, 0.14f);
         break;
     }
     case T_FLUFF: {
@@ -6235,7 +6243,7 @@ static void drawAurora(float starA) {
     if (g_shaders < 2) { g_auroraK = 0; return; }
     int bx = ifloor(g_cam.x), bz = ifloor(g_cam.z);
     Chunk* ch = getChunk(bx >> 4, bz >> 4);
-    int bi = ch ? ch->biome[(bz & 15) * 16 + (bx & 15)] : BI_PLAINS;
+    int bi = ch ? ch->biome[(bz & 15) * 16 + (bx & 15)] : (int)BI_PLAINS;
     float want = (bi == BI_SNOW || bi == BI_TAIGA || bi == BI_MOUNT) ? 1.f : 0.f;
     g_auroraK += (want - g_auroraK) * 0.02f;   // плавно появляется при входе в холодные края
     float A = g_auroraK * starA * (1.f - g_rainK);
@@ -6755,7 +6763,7 @@ static void computeShaderParams() {
     g_mistK = (g_shaders >= 1 && x < 0.3f) ? sqrtf(sinf(x / 0.3f * 3.1416f)) * 0.85f * (1.f - g_rainK) : 0.f;
     if (g_mistK > 0) {
         Chunk* pc = getChunk(ifloor(P.x) >> 4, ifloor(P.z) >> 4);
-        int b = pc ? pc->biome[(ifloor(P.z) & 15) * 16 + (ifloor(P.x) & 15)] : BI_PLAINS;
+        int b = pc ? pc->biome[(ifloor(P.z) & 15) * 16 + (ifloor(P.x) & 15)] : (int)BI_PLAINS;
         if (b == BI_DESERT || b == BI_BADLANDS || b == BI_SAVANNA) g_mistK *= 0.2f;
         if (b == BI_SWAMP) g_mistK = std::min(1.f, g_mistK * 1.5f);
         for (int i = 0; i < 3; i++) g_mistCol[i] = lerpf(g_skyCol[i], 0.93f, 0.55f) * (0.55f + 0.45f * g_dayLight);
@@ -6936,9 +6944,10 @@ static void tickFurnaces(float dt) {
             if (ddx * ddx + ddz * ddz < 36.0) { int v = (int)f.xp; f.xp -= v; spawnXp(fx + 0.5, fy + 1.0, fz + 0.5, v); }
         }
         bool burning = f.burn > 0;
-        if (burning != wasBurning && isLoaded(fx, fz)) {
+        (void)wasBurning;
+        if (isLoaded(fx, fz)) {   // вид печи сверяется каждый раз: огонь мог погаснуть, пока чанк был выгружен
             u8 b = getBlock(fx, fy, fz);
-            if (b == B_FURNACE || b == B_FURNACE_LIT) setBlockRaw(fx, fy, fz, burning ? B_FURNACE_LIT : B_FURNACE, getMeta(fx, fy, fz));
+            if ((b == B_FURNACE && burning) || (b == B_FURNACE_LIT && !burning)) setBlockRaw(fx, fy, fz, burning ? B_FURNACE_LIT : B_FURNACE, getMeta(fx, fy, fz));
         }
     }
 }
@@ -7321,7 +7330,7 @@ static void animalBrain(Mob& m, float dt, Rng& r, float& spdMul) {
     m.lookT -= dt;
     // взгляд: иногда поворачивает голову к игроку рядом
     float wantHead = 0;
-    if (pdist < 7.f && m.lookT > -3.f) { float rel = atan2f(pdx, pdz) - m.yaw; while (rel > 3.1416f) rel -= 6.2832f; while (rel < -3.1416f) rel += 6.2832f; wantHead = clampf(rel, -0.9f, 0.9f); }
+    if (pdist < 7.f && m.lookT > -3.f) { float rel = wrapPi(atan2f(pdx, pdz) - m.yaw); wantHead = clampf(rel, -0.9f, 0.9f); }
     if (m.lookT < -6.f) m.lookT = r.f() * 4.f;
     m.headYaw += (wantHead - m.headYaw) * std::min(1.f, dt * 5.f);
     // любовь: ищет пару своего вида
@@ -7574,9 +7583,9 @@ static void updateMob(Mob& m, float dt, Rng& r) {
     m.sndT -= dt;
     if (m.sndT <= 0) {
         m.sndT = 6.f + r.f() * 10.f;
-        float dist = sqrtf(pdist * pdist + pdy * pdy);
+        float lx = (float)(P.x - m.x), lz = (float)(P.z - m.z), ly = (float)(P.y - m.y);   // слышит местный игрок, а не ближайший гость
+        float dist = sqrtf(lx * lx + lz * lz + ly * ly);
         int snd = d.snd; float pitch = 0.9f + r.f() * 0.2f;
-        { float lx = (float)(P.x - m.x), lz = (float)(P.z - m.z), ly = (float)(P.y - m.y); pdist = sqrtf(lx * lx + lz * lz); pdy = ly; }   // слышит местный игрок
         if (m.type == MOB_DOG && m.tame && m.hp < mobMaxHp(m) * 0.5f) snd = SND_WHINE;
         if (m.type == MOB_DOG && !m.tame && m.angryT > 0) snd = SND_GROWL;
         if (m.type == MOB_CAT && m.tame && m.sit) snd = SND_PURR;
@@ -8443,7 +8452,7 @@ static void updateFish(Mob& m, float dt, Rng& r) {
         float hs = sqrtf(m.vx * m.vx + m.vz * m.vz);
         if (hs > 0.05f) {
             float wy2 = atan2f(m.vx, m.vz), dy = wy2 - m.yaw;
-            while (dy > (float)M_PI) dy -= 2 * (float)M_PI; while (dy < -(float)M_PI) dy += 2 * (float)M_PI;
+            dy = wrapPi(dy);
             m.yaw += dy * std::min(1.f, dt * 5.f);
         }
         float wp = clampf(atan2f(m.vy, std::max(hs, 0.2f)), -0.6f, 0.6f);
@@ -9916,9 +9925,9 @@ static bool writeFileAtomic(const std::string& path, const std::vector<u8>& data
     FILE* f = fopen(tmp.c_str(), "wb");
     if (!f) return false;
     size_t w = fwrite(data.data(), 1, data.size(), f);
-    fflush(f);
-    fclose(f);
-    if (w != data.size()) { remove(tmp.c_str()); return false; }
+    bool flushed = fflush(f) == 0;
+    bool closed = fclose(f) == 0;   // при нехватке места ошибка часто всплывает только здесь
+    if (w != data.size() || !flushed || !closed) { remove(tmp.c_str()); return false; }
 #ifdef _WIN32
     remove(path.c_str());
 #endif
@@ -9975,6 +9984,10 @@ static bool saveWorld() {
     }
     b.w<u32>(0x43594144u); b.w<i32>(g_dayCount);   // "DAYC": счётчик суток (фазы луны)
     bool ok = writeFileAtomic(worldPath(g_worldSlot), b.d);
+    if (!ok) {   // раньше ошибка молча терялась — игрок не знал, что прогресс не записан
+        SDL_Log("save: write failed for slot %d", g_worldSlot);
+        showMsg("НЕ УДАЛОСЬ СОХРАНИТЬ МИР - ПРОВЕРЬ СВОБОДНОЕ МЕСТО", 4.f);
+    }
     return ok;
 }
 
@@ -9989,6 +10002,21 @@ static void resetWorldState() {
     P = Player();
 }
 
+// после чтения файла: координаты, взгляд и здоровье должны быть обычными числами в разумных пределах
+static void sanitizePlayerState() {
+    if (abs(P.spawnX) > 30000000 || abs(P.spawnZ) > 30000000) P.spawnX = P.spawnZ = 0;
+    if (P.spawnY < 1 || P.spawnY >= WH) P.spawnY = 100;
+    if (!saneF(P.x, 3e7) || !saneF(P.z, 3e7)) { P.x = P.spawnX + 0.5; P.z = P.spawnZ + 0.5; }
+    if (!(P.y > -50 && P.y < 400)) P.y = 100;
+    g_cam.yaw = wrapPi(g_cam.yaw);
+    g_cam.pitch = std::isfinite(g_cam.pitch) ? clampf(g_cam.pitch, -1.55f, 1.55f) : 0.f;
+    P.health = std::isfinite(P.health) ? clampf(P.health, 0.f, 20.f) : 20.f;
+    P.hunger = std::isfinite(P.hunger) ? clampf(P.hunger, 0.f, 20.f) : 20.f;
+    P.exhaustion = std::isfinite(P.exhaustion) ? clampf(P.exhaustion, 0.f, 40.f) : 0.f;
+    P.air = std::isfinite(P.air) ? clampf(P.air, 0.f, 10.f) : 10.f;
+    if (P.dead && P.health > 0) P.dead = false;
+    if (!P.dead && P.health <= 0) P.health = 1;   // живой с нулём здоровья — повреждённые данные
+}
 static bool loadWorld(int slot) {
     std::vector<u8> d;
     if (!readFile(worldPath(slot), d)) return false;
@@ -10015,7 +10043,7 @@ static bool loadWorld(int slot) {
     u32 nch = b.r<u32>();
     for (u32 i = 0; i < nch && !b.bad; i++) {
         i64 k = b.r<i64>(); u32 len = b.r<u32>();
-        if (b.p + len > b.d.size()) { b.bad = true; break; }
+        if (len > b.d.size() - b.p) { b.bad = true; break; }   // без переполнения на 32-битных телефонах
         g_savedChunks[k] = std::vector<u8>(b.d.begin() + b.p, b.d.begin() + b.p + len);
         b.p += len;
         if (b.ver < 4) {   // старый чанк высотой 128: дополняем воздухом до 256
@@ -10044,7 +10072,21 @@ static bool loadWorld(int slot) {
     }
     g_grow.clear();   // саженцы будут собраны при загрузке чанков
     if (g_tick < 0) g_tick = 0;
-    if (!(P.y > -50 && P.y < 400)) P.y = 100;
+    // повреждённый файл не должен дать NaN-координаты, «бессмертие» или неизвестный режим
+    if (g_mode != GM_SURVIVAL && g_mode != GM_CREATIVE) g_mode = GM_SURVIVAL;
+    if (!(g_dayTime >= 0 && g_dayTime < 1)) g_dayTime = 0.05f;
+    if (!saneF(g_playTime, 1e9)) g_playTime = 0;
+    sanitizePlayerState();
+    for (size_t i = 0; i < g_parked.size();) {
+        Mob& m = g_parked[i];
+        if (!saneF(m.x, 3e7) || !saneF(m.y, 1000) || !saneF(m.z, 3e7)) { g_parked.erase(g_parked.begin() + i); continue; }
+        m.yaw = wrapPi(m.yaw); m.wishYaw = m.yaw; if (!std::isfinite(m.age)) m.age = 0; if (!(m.hp > 0 && m.hp < 1000)) m.hp = 10;
+        i++;
+    }
+    if (b.bad) {   // файл обрезан или испорчен: сохраним оригинал рядом, чтобы автосохранение не затёрло его навсегда
+        writeFileAtomic(worldPath(slot) + ".bak", b.d);
+        SDL_Log("save: slot %d damaged, original kept as .bak", slot);
+    }
     return true;
 }
 static void deleteWorld(int slot) { remove(worldPath(slot).c_str()); }
@@ -11192,7 +11234,7 @@ static void updateOrbs(float dt) {
         o.age += dt; o.ph += dt * 3.f;
         double dx = P.x - o.x, dy = P.y + 0.8 - o.y, dz = P.z - o.z;
         double d = sqrt(dx * dx + dy * dy + dz * dz);
-        bool pull = !P.dead && d < 7.5 && o.age > 0.4f;
+        bool pull = !P.dead && d < 7.5 && d > 1e-4 && o.age > 0.4f;
         if (pull) {   // тянется к игроку тем сильнее, чем ближе
             float k = (float)(1.0 - d / 7.5); k *= k;
             o.vx += (float)(dx / d) * 30.f * k * dt; o.vy += (float)(dy / d) * 30.f * k * dt; o.vz += (float)(dz / d) * 30.f * k * dt;
@@ -11572,6 +11614,7 @@ static void drawTitle(const std::string& t, float y, float scale) {
 static bool g_running = true, g_background = false;
 static float g_time = 0, g_autosaveT = 0, g_tickAcc = 0;
 static bool g_needSpawnY = false;
+static bool g_respawnFix = false;   // после смерти: если место возрождения застроено — поднять игрока до свободного места
 #ifndef __ANDROID__
 static bool g_debugHost = false;   // отладка на ПК: сразу открыть мир для сети
 #endif
@@ -11646,6 +11689,7 @@ static void createTextures() {
     SDL_SetTextureBlendMode(g_atlasTex, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(g_atlasTex, g_tileRes > 16 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);   // детальные текстуры — сглаживать, пиксельные — нет
     g_animFrameW = g_animFrameL = -1;
+    g_caustFrame = -1;   // блики дна заново попадут в новый атлас
     g_fontTex = SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, FONT_TEX_W, FONT_TEX_H);
     SDL_UpdateTexture(g_fontTex, NULL, g_fontPx.data(), FONT_TEX_W * 4);
     SDL_SetTextureBlendMode(g_fontTex, SDL_BLENDMODE_BLEND);
@@ -11933,6 +11977,7 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
     if (type != M_HELLO && !c.hello) return;
     switch (type) {
         case M_HELLO: {
+            if (c.hello) break;   // повторное приветствие не должно плодить двойников
             int proto = b.r<i32>(); std::string name = b.rstr();
             if (proto != NET_PROTO) { WBuf k; netBegin(k, M_KICK); k.wstr("НЕ СОВПАДАЕТ ВЕРСИЯ ИГРЫ"); netSend(c, k); c.alive = false; return; }
             if ((int)g_conns.size() > 8) { WBuf k; netBegin(k, M_KICK); k.wstr("СЕРВЕР ЗАПОЛНЕН"); netSend(c, k); c.alive = false; return; }
@@ -11949,8 +11994,11 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
         }
         case M_POS: {
             RemotePlayer* rp = remoteById(c.id); if (!rp) break;
-            rp->tx = b.r<double>(); rp->ty = b.r<double>(); rp->tz = b.r<double>(); rp->tyaw = b.r<float>(); rp->tpitch = b.r<float>();
-            rp->held = b.r<u16>(); rp->flags = b.r<u8>(); rp->hp = b.r<float>();
+            double x = b.r<double>(), y = b.r<double>(), z = b.r<double>(); float yaw = b.r<float>(), pitch = b.r<float>();
+            u16 held = b.r<u16>(); u8 fl = b.r<u8>(); float hp = b.r<float>();
+            if (b.bad || !saneF(x, 3e7) || !saneF(y, 2000) || !saneF(z, 3e7) || !std::isfinite(yaw) || !std::isfinite(pitch)) break;
+            rp->tx = x; rp->ty = y; rp->tz = z; rp->tyaw = wrapPi(yaw); rp->tpitch = clampf(pitch, -1.6f, 1.6f);
+            rp->held = held < I_END ? held : 0; rp->flags = fl; rp->hp = std::isfinite(hp) ? clampf(hp, 0.f, 20.f) : 20.f;
             if (rp->flags & 1) rp->swing = 1.f;
             rp->lastPos = nowMs();
             break;
@@ -11959,6 +12007,10 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
         case M_SETBLOCK: {
             int x = b.r<i32>(), y = b.r<i32>(), z = b.r<i32>(); u8 nb = b.r<u8>(), nm = b.r<u8>();
             if (b.bad || y < 0 || y >= WH || nb >= B_COUNT) break;
+            {   // гость меняет блоки только рядом с собой (рука достаёт на ~5 блоков; запас — на задержку сети)
+                RemotePlayer* rp = remoteById(c.id);
+                if (!rp || fabs(x + 0.5 - rp->tx) > 24 || fabs(z + 0.5 - rp->tz) > 24 || fabs(y - rp->ty) > 24) break;
+            }
             if (!getChunk(x >> 4, z >> 4)) loadOrGenChunk(x >> 4, z >> 4);
             u8 old = getBlock(x, y, z);
             i64 k = posKey(x, y, z);
@@ -11977,7 +12029,9 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
             break;
         }
         case M_HITMOB: {
-            u32 uid = b.r<u32>(); float dmg = clampf(b.r<float>(), 0.f, 60.f);
+            u32 uid = b.r<u32>(); float dmg = b.r<float>();
+            if (b.bad || !std::isfinite(dmg)) break;
+            dmg = clampf(dmg, 0.f, 60.f);
             RemotePlayer* rp = remoteById(c.id);
             Mob* m = mobByUid(uid);
             if (!m || !rp) break;
@@ -11989,6 +12043,7 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
         }
         case M_USEMOB: {
             u32 uid = b.r<u32>(); Stack held = b.rs();
+            if (b.bad) break;
             Mob* m = mobByUid(uid); if (!m) break;
             Stack before = held;
             g_dropSink = c.id;
@@ -12003,7 +12058,11 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
             int x = b.r<i32>(), y = b.r<i32>(), z = b.r<i32>(); i64 k = posKey(x, y, z);
             if (getBlock(x, y, z) != B_CHEST) break;
             std::vector<Stack>& v = g_chests[k]; if (v.size() < 27) v.resize(27);
-            if (type == M_CHESTSET) { for (int i = 0; i < 27; i++) v[i] = b.rs(); break; }
+            if (type == M_CHESTSET) {   // обрезанный пакет не должен опустошить сундук
+                std::vector<Stack> nv(27); for (int i = 0; i < 27; i++) nv[i] = b.rs();
+                if (!b.bad) v = nv;
+                break;
+            }
             WBuf o; netBegin(o, M_CHEST); o.w<i32>(x); o.w<i32>(y); o.w<i32>(z); for (int i = 0; i < 27; i++) o.ws(v[i]); netSend(c, o);
             break;
         }
@@ -12011,14 +12070,18 @@ static void hostHandle(Conn& c, u8 type, WBuf& b) {
             int x = b.r<i32>(), y = b.r<i32>(), z = b.r<i32>(); i64 k = posKey(x, y, z);
             u8 fb = getBlock(x, y, z); if (fb != B_FURNACE && fb != B_FURNACE_LIT) break;
             Furnace& f = g_furnaces[k];
-            if (type == M_FURNSET) { f.in = b.rs(); f.fuel = b.rs(); f.out = b.rs(); }
+            if (type == M_FURNSET) { Stack a = b.rs(), fu = b.rs(), o = b.rs(); if (!b.bad) { f.in = a; f.fuel = fu; f.out = o; } }
             WBuf o; netBegin(o, M_FURN); o.w<i32>(x); o.w<i32>(y); o.w<i32>(z); o.ws(f.in); o.ws(f.fuel); o.ws(f.out); o.w<float>(f.burn); o.w<float>(f.burnMax); o.w<float>(f.cook);
             netSend(c, o);
             break;
         }
         case M_ARROW: {
             double x = b.r<double>(), y = b.r<double>(), z = b.r<double>(); float vx = b.r<float>(), vy = b.r<float>(), vz = b.r<float>(), dmg = b.r<float>(); bool crit = b.r<u8>() != 0;
-            if (b.bad) break;
+            if (b.bad || !saneF(x, 3e7) || !saneF(y, 2000) || !saneF(z, 3e7) || !saneF(vx, 200) || !saneF(vy, 200) || !saneF(vz, 200) || !std::isfinite(dmg)) break;
+            {   // стрела вылетает рядом со стрелком, а не где угодно
+                RemotePlayer* rp = remoteById(c.id);
+                if (!rp || fabs(x - rp->tx) > 8 || fabs(y - rp->ty) > 8 || fabs(z - rp->tz) > 8) break;
+            }
             spawnArrow(x, y, z, vx, vy, vz, clampf(dmg, 0, 20), true);
             g_arrows.back().crit = crit; g_arrows.back().shooter = c.id;
             netOnArrow(g_arrows.back(), c.id);
@@ -12088,8 +12151,8 @@ static void netHostTick(float dt) {
         float k = std::min(1.f, dt * 12.f);
         double ox = r.x, oz = r.z;
         r.x += (r.tx - r.x) * k; r.y += (r.ty - r.y) * k; r.z += (r.tz - r.z) * k;
-        float dy = r.tyaw - r.yaw; while (dy > 3.1416f) dy -= 6.2832f; while (dy < -3.1416f) dy += 6.2832f;
-        r.yaw += dy * k; r.pitch += (r.tpitch - r.pitch) * k;
+        float dy = wrapPi(r.tyaw - r.yaw);
+        r.yaw = wrapPi(r.yaw + dy * k); r.pitch += (r.tpitch - r.pitch) * k;
         r.speed = (float)(sqrt((r.x - ox) * (r.x - ox) + (r.z - oz) * (r.z - oz)) / std::max(dt, 0.001f));
         r.walk += dt * std::min(r.speed, 6.f) * 2.2f; r.swing = std::max(0.f, r.swing - dt * 3.f);
     }
@@ -12189,6 +12252,10 @@ static void clientHandle(u8 type, WBuf& b) {
             int myId = b.r<u8>(); u32 seed = b.r<u32>(); int gv = b.r<u8>(); int mode = b.r<u8>(); float dt = b.r<float>();
             int sx = b.r<i32>(), sy = b.r<i32>(), sz = b.r<i32>(); std::string wn = b.rstr(), hn = b.rstr();
             if (b.bad) { g_srv.alive = false; break; }
+            if (mode != GM_SURVIVAL && mode != GM_CREATIVE) mode = GM_SURVIVAL;
+            if (gv < 1 || gv > 3) gv = 3;
+            if (!(dt >= 0 && dt < 1)) dt = 0.05f;
+            sy = clampi(sy, 1, WH - 2); if (abs(sx) > 30000000 || abs(sz) > 30000000) sx = sz = 0;
             resetWorldState();
             g_netRole = NET_CLIENT; g_netRoleAny = g_netRole != NET_NONE;   // resetWorldState не трогает сеть
             g_myId = myId; g_genVer = gv; worldInitNoise(seed); g_mode = mode; g_dayTime = dt; g_mpSeed = seed; g_mpWorld = wn;
@@ -12205,7 +12272,8 @@ static void clientHandle(u8 type, WBuf& b) {
         case M_CHUNK: {
             int cx = b.r<i32>(), cz = b.r<i32>(); bool has = b.r<u8>() != 0;
             std::vector<u8> data;
-            if (has) { u32 n = b.r<u32>(); if (b.p + n <= b.d.size()) { data.assign(b.d.begin() + b.p, b.d.begin() + b.p + n); b.p += n; } else has = false; }
+            if (has) { u32 n = b.r<u32>(); if (!b.bad && n <= b.d.size() - b.p) { data.assign(b.d.begin() + b.p, b.d.begin() + b.p + n); b.p += n; } else has = false; }
+            if (b.bad) break;
             g_chunkReq.erase(ckey(cx, cz));
             clientInsertChunk(cx, cz, has ? &data : nullptr);
             break;
@@ -12226,7 +12294,9 @@ static void clientHandle(u8 type, WBuf& b) {
             int n = b.r<u8>();
             for (int i = 0; i < n && !b.bad; i++) {
                 int id = b.r<u8>(); double x = b.r<double>(), y = b.r<double>(), z = b.r<double>(); float yaw = b.r<float>(), pitch = b.r<float>(); u16 held = b.r<u16>(); u8 fl = b.r<u8>(); float hp = b.r<float>();
-                if (id == g_myId) continue;
+                if (b.bad || id == g_myId) continue;
+                if (!saneF(x, 3e7) || !saneF(y, 2000) || !saneF(z, 3e7) || !std::isfinite(yaw) || !std::isfinite(pitch)) continue;
+                yaw = wrapPi(yaw); pitch = clampf(pitch, -1.6f, 1.6f); if (held >= I_END) held = 0; hp = std::isfinite(hp) ? clampf(hp, 0.f, 20.f) : 20.f;
                 RemotePlayer* r = remoteById(id);
                 if (!r) { RemotePlayer np; np.id = id; np.name = "ИГРОК"; np.x = x; np.y = y; np.z = z; g_remote.push_back(np); r = &g_remote.back(); }
                 r->tx = x; r->ty = y; r->tz = z; r->tyaw = yaw; r->tpitch = pitch; r->held = held; r->flags = fl; r->hp = hp;
@@ -12258,6 +12328,9 @@ static void clientHandle(u8 type, WBuf& b) {
                 u32 uid = b.r<u32>(); int type = b.r<u8>(), var = b.r<u8>(); u8 fl = b.r<u8>(); int owner = b.r<u8>();
                 float x = b.r<float>(), y = b.r<float>(), z = b.r<float>(), yaw = b.r<float>(), hy = b.r<float>(), walk = b.r<float>(), hp = b.r<float>(), eat = b.r<float>(), pitch = b.r<float>(), phase = b.r<float>();
                 if (b.bad || type >= MOB_COUNT) break;
+                if (!saneF(x, 3e7) || !saneF(y, 2000) || !saneF(z, 3e7) || !std::isfinite(yaw) || !std::isfinite(hy) || !std::isfinite(hp)) continue;
+                yaw = wrapPi(yaw); hy = clampf(std::isfinite(hy) ? hy : 0.f, -3.2f, 3.2f);
+                if (!std::isfinite(walk)) { walk = 0; } if (!std::isfinite(eat)) { eat = 0; } if (!std::isfinite(pitch)) { pitch = 0; } if (!std::isfinite(phase)) { phase = 0; }
                 auto it = idx.find(uid);
                 Mob* m;
                 if (it == idx.end()) { Mob nm; nm.uid = uid; nm.type = type; nm.x = x; nm.y = y; nm.z = z; nm.yaw = yaw; g_mobs.push_back(nm); seen.push_back(1); m = &g_mobs.back(); idx[uid] = g_mobs.size() - 1; }
@@ -12272,19 +12345,20 @@ static void clientHandle(u8 type, WBuf& b) {
         }
         case M_TIME: {
             float dt = b.r<float>(); int w = b.r<u8>(); float rk = b.r<float>(), tk = b.r<float>();
-            if (b.bad) break;
+            if (b.bad || !(dt >= 0 && dt < 1) || !std::isfinite(rk) || !std::isfinite(tk)) break;
+            w = clampi(w, 0, 2); rk = clampf(rk, 0.f, 1.f); tk = clampf(tk, 0.f, 1.f);
             float diff = dt - g_dayTime; if (diff > 0.5f) diff -= 1.f; if (diff < -0.5f) diff += 1.f;
             if (fabsf(diff) > 0.002f) g_dayTime = dt;
             g_weather = w; g_rainK += (rk - g_rainK) * 0.5f; g_thunderK += (tk - g_thunderK) * 0.5f;
             if (b.p + 4 <= b.d.size()) { int dc = b.r<i32>(); if (!b.bad) g_dayCount = std::max(0, dc); }
             break;
         }
-        case M_HURT: { float d = b.r<float>(); double fx = b.r<double>(), fz = b.r<double>(); if (!b.bad && g_mode == GM_SURVIVAL) playerHurt(d, fx, fz); break; }
-        case M_BOLT: { float x = b.r<float>(), z = b.r<float>(); b.r<u32>(); if (!b.bad) lightningStrike(x, z, false); break; }
+        case M_HURT: { float d = b.r<float>(); double fx = b.r<double>(), fz = b.r<double>(); if (!b.bad && g_mode == GM_SURVIVAL && std::isfinite(d) && saneF(fx, 3e7) && saneF(fz, 3e7)) playerHurt(clampf(d, 0.f, 40.f), fx, fz); break; }
+        case M_BOLT: { float x = b.r<float>(), z = b.r<float>(); b.r<u32>(); if (!b.bad && saneF(x, 3e7) && saneF(z, 3e7)) lightningStrike(x, z, false); break; }
         case M_GIVE: {
             int xp = b.r<i32>(); double x = b.r<double>(), y = b.r<double>(), z = b.r<double>(); int n = b.r<u16>();
-            for (int i = 0; i < n && !b.bad; i++) { Stack s = b.rs(); float sx = b.r<float>(), sy = b.r<float>(), sz = b.r<float>(); if (!b.bad) spawnDrop(s, sx, sy, sz); }
-            if (!b.bad && xp > 0) spawnXp(x, y, z, xp);
+            for (int i = 0; i < n && !b.bad; i++) { Stack s = b.rs(); float sx = b.r<float>(), sy = b.r<float>(), sz = b.r<float>(); if (!b.bad && saneF(sx, 3e7) && saneF(sy, 2000) && saneF(sz, 3e7)) spawnDrop(s, sx, sy, sz); }
+            if (!b.bad && xp > 0 && saneF(x, 3e7) && saneF(y, 2000) && saneF(z, 3e7)) spawnXp(x, y, z, std::min(xp, 100000));
             break;
         }
         case M_CHEST: {
@@ -12304,7 +12378,7 @@ static void clientHandle(u8 type, WBuf& b) {
         }
         case M_ARROWFX: {
             double x = b.r<double>(), y = b.r<double>(), z = b.r<double>(); float vx = b.r<float>(), vy = b.r<float>(), vz = b.r<float>(); bool crit = b.r<u8>() != 0;
-            if (b.bad) break;
+            if (b.bad || !saneF(x, 3e7) || !saneF(y, 2000) || !saneF(z, 3e7) || !saneF(vx, 200) || !saneF(vy, 200) || !saneF(vz, 200)) break;
             spawnArrow(x, y, z, vx, vy, vz, 0, false); g_arrows.back().cosmetic = true; g_arrows.back().crit = crit;
             break;
         }
@@ -12384,7 +12458,7 @@ static void netClientTick(float dt) {
     for (Mob& m : g_mobs) {
         if (m.tx == 0 && m.tz == 0) continue;
         m.x += (m.tx - m.x) * k; m.y += (m.ty - m.y) * k; m.z += (m.tz - m.z) * k;
-        float dy = m.wishYaw - m.yaw; while (dy > 3.1416f) dy -= 6.2832f; while (dy < -3.1416f) dy += 6.2832f; m.yaw += dy * k;
+        float dy = wrapPi(m.wishYaw - m.yaw); m.yaw = wrapPi(m.yaw + dy * k);
         m.hurtT = std::max(0.f, m.hurtT - dt);
         m.sndT -= dt;
         if (m.sndT <= 0) { m.sndT = 8.f + (m.uid % 7); double dx = m.x - P.x, dz = m.z - P.z; float d = (float)sqrt(dx * dx + dz * dz); if (d < 20 && m.type != MOB_FISH) playSound(MD[m.type].snd, 0.5f * (1.f - d / 20.f), m.age < 0 ? 1.3f : 1.f); }
@@ -12392,7 +12466,7 @@ static void netClientTick(float dt) {
     for (RemotePlayer& r : g_remote) {
         double ox = r.x, oz = r.z;
         r.x += (r.tx - r.x) * k; r.y += (r.ty - r.y) * k; r.z += (r.tz - r.z) * k;
-        float dy = r.tyaw - r.yaw; while (dy > 3.1416f) dy -= 6.2832f; while (dy < -3.1416f) dy += 6.2832f; r.yaw += dy * k; r.pitch += (r.tpitch - r.pitch) * k;
+        float dy = wrapPi(r.tyaw - r.yaw); r.yaw += dy * k; r.pitch += (r.tpitch - r.pitch) * k;
         r.speed = (float)(sqrt((r.x - ox) * (r.x - ox) + (r.z - oz) * (r.z - oz)) / std::max(dt, 0.001f));
         r.walk += dt * std::min(r.speed, 6.f) * 2.2f; r.swing = std::max(0.f, r.swing - dt * 3.f);
     }
@@ -12505,6 +12579,7 @@ static bool loadMpProfile() {
     for (int i = 0; i < 36; i++) P.inv[i] = b.rs();
     for (int i = 0; i < 4; i++) P.armor[i] = b.rs();
     if (b.bad) { P = Player(); return false; }
+    sanitizePlayerState();
     return true;
 }
 
@@ -12771,7 +12846,17 @@ static void backAction() {
         case SCR_NEWWORLD: g_screen = SCR_WORLDS; break;
         case SCR_CONFIRM_DEL: g_screen = SCR_WORLDS; break;
         case SCR_INTRO: g_introSkip = true; break;
-        case SCR_MAIN: g_running = false; break;
+        case SCR_MAIN: {
+#ifndef __ANDROID__
+            if (getenv("BW_NOQUIT")) break;   // отладка: случайный ввод не закрывает игру
+#endif
+            // «Назад» в главном меню: выход только по второму нажатию, чтобы игра не закрывалась случайно
+            static Uint32 armed = 0;
+            Uint32 now = SDL_GetTicks();
+            if (armed && now - armed < 2500) g_running = false;
+            else { armed = now; showMsg("НАЖМИ «НАЗАД» ЕЩЁ РАЗ, ЧТОБЫ ВЫЙТИ", 2.5f); }
+            break;
+        }
         case SCR_MP: if (g_netRole == NET_CLIENT) netClientStop(""); netDiscoveryStop(); g_screen = SCR_MAIN; break;
         default: break;
     }
@@ -12793,7 +12878,7 @@ static void pickTargetBlock() {
     if (!g_target.hit) return;
     u8 b = getBlock(g_target.x, g_target.y, g_target.z);
     int id = b;
-    if (b == B_GRASS) id = B_GRASS; if (b == B_FURNACE_LIT) id = B_FURNACE;
+    if (b == B_GRASS) id = B_GRASS; else if (b == B_FURNACE_LIT) id = B_FURNACE;
     for (int i = 0; i < 9; i++) if (P.inv[i].id == id) { selectSlot(i); return; }
     if (g_mode == GM_CREATIVE) { P.inv[P.sel] = mkStack(id, maxStack(id)); g_heldNameT = 2.f; return; }
     for (int i = 9; i < 36; i++) if (P.inv[i].id == id) { std::swap(P.inv[i], P.inv[P.sel]); g_heldNameT = 2.f; return; }
@@ -13032,7 +13117,7 @@ static void drawUnderwaterShafts() {
             float fade = k < 2 ? 1.f : 0.f;
             float dist = sqrtf(Pc[k][0] * Pc[k][0] + Pc[k][1] * Pc[k][1] + Pc[k][2] * Pc[k][2]);
             fade *= 1.f - smooth01(6.f, 16.f, dist);
-            v.color = mkColor(col[0], col[1], col[2], a * (k < 2 ? fade : 0.f) + (k >= 2 ? 0.f : 0.f));
+            v.color = mkColor(col[0], col[1], col[2], k < 2 ? a * fade : 0.f);
             v.tex_coord.x = v.tex_coord.y = 0;
             vb.push_back(v);
         }
@@ -13355,6 +13440,16 @@ static void screenLoading() {
         drawText(tt, g_W / 2.f, by + bh + uiS() * 6, tp, C(255, 240, 200), 1);
     }
     if (done >= need) {
+        if (g_respawnFix) {
+            g_respawnFix = false;
+            int x = ifloor(P.x), z = ifloor(P.z), y = ifloor(P.y);
+            auto blocked = [&](int yy) { return BD[getBlock(x, yy, z)].solid || BD[getBlock(x, yy + 1, z)].solid || getBlock(x, yy, z) == B_LAVA; };
+            if (blocked(y)) {
+                int yy = y; while (yy < WH - 3 && blocked(yy)) yy++;
+                P.y = yy + 0.01;
+                if (yy != y) showMsg("МЕСТО ВОЗРОЖДЕНИЯ ЗАНЯТО - ТЫ ПОЯВИЛСЯ ВЫШЕ", 3.f);
+            }
+        }
         if (g_needSpawnY) {
             int x = ifloor(P.x), z = ifloor(P.z), y = WH - 2;
             while (y > 1 && !BD[getBlock(x, y, z)].solid && getBlock(x, y, z) != B_WATER) y--;
@@ -13433,7 +13528,7 @@ static void screenDead() {
     float S = uiS();
     drawTitle("ВЫ ПОГИБЛИ", g_H * 0.25f, 3.5f);
     float bw = S * 70, bh = S * 11, bx = (g_W - bw) / 2, by = g_H * 0.5f;
-    if (button(70, bx, by, bw, bh, "ВОЗРОДИТЬСЯ")) { respawnPlayer(); g_needSpawnY = false; g_screen = SCR_LOADING; }
+    if (button(70, bx, by, bw, bh, "ВОЗРОДИТЬСЯ")) { respawnPlayer(); g_needSpawnY = false; g_respawnFix = true; g_screen = SCR_LOADING; }
     if (button(71, bx, by + bh * 1.3f, bw, bh, "В ГЛАВНОЕ МЕНЮ")) { respawnPlayer(); exitToMenu(); }
 }
 static float g_rowX = 0, g_rowW = 0;   // колонка строк настроек
@@ -13581,7 +13676,7 @@ int main(int argc, char** argv) {
                     if (g_audioDev) SDL_PauseAudioDevice(g_audioDev, 0);
                     g_fingers.clear(); g_joyActive = false;
                     break;
-                case SDL_RENDER_DEVICE_RESET: case SDL_RENDER_TARGETS_RESET: createTextures(); break;
+                case SDL_RENDER_DEVICE_RESET: case SDL_RENDER_TARGETS_RESET: dofFree(); createTextures(); break;
                 case SDL_WINDOWEVENT:
                     if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) SDL_GetRendererOutputSize(g_ren, &g_W, &g_H);
                     break;
@@ -13697,7 +13792,8 @@ int main(int argc, char** argv) {
         }
         if (g_screen != SCR_GAME && g_msgT > 0 && g_screen != SCR_LOADING) {
             g_msgT -= dt;
-            drawText(g_msg, g_W / 2.f, g_H - uiS() * 8, fontPx(), C(255, 230, 160), 1);
+            float my = g_screen == SCR_MAIN ? logoY() + logoPx() * 9 + fontPx() * 11 : g_H - uiS() * 8;   // в главном меню низ занят кнопками
+            drawText(g_msg, g_W / 2.f, my, fontPx(), C(255, 230, 160), 1);
         }
         uiEnd();
         SDL_UnlockMutex(g_worldMutex);
